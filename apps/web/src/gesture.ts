@@ -7,12 +7,13 @@ export type PointerDown = {
   kind: PointerKind;
   button: number;
   point: Point;
+  time: number;
 };
 
 export type Modifiers = { panTool: boolean; spaceDown: boolean };
 
 export type Effect =
-  | { type: "StartStroke"; secondary: boolean }
+  | { type: "StartStroke"; secondary: boolean; point: Point }
   | { type: "ExtendStroke" }
   | { type: "CommitStroke" }
   | { type: "DiscardStroke" }
@@ -23,13 +24,15 @@ type Tracked = { point: Point; kind: PointerKind };
 
 type State =
   | { mode: "Idle" }
+  | { mode: "Pending"; pointerId: number; point: Point; time: number }
   | { mode: "Draw"; pointerId: number }
   | { mode: "Pan"; pointerId: number }
   | { mode: "Pinch" };
 
 export type Gestures = {
   down(event: PointerDown, modifiers: Modifiers): Effect[];
-  move(pointerId: number, point: Point): Effect[];
+  move(pointerId: number, point: Point, time: number): Effect[];
+  tick(time: number): Effect[];
   up(pointerId: number): Effect[];
   cancel(pointerId: number): Effect[];
 };
@@ -37,6 +40,9 @@ export type Gestures = {
 const PRIMARY = 0;
 const MIDDLE = 1;
 const SECONDARY = 2;
+
+export const PENDING_MS = 60;
+const PENDING_SLOP_PX = 6;
 
 export function createGestures(): Gestures {
   const pointers = new Map<number, Tracked>();
@@ -58,6 +64,10 @@ export function createGestures(): Gestures {
     if (event.kind === "pen") penSeen = true;
 
     if (event.kind === "touch" && touchIds().length >= 2) {
+      if (state.mode === "Pending") {
+        state = { mode: "Pinch" };
+        return [];
+      }
       const discard = state.mode === "Draw" && pointers.get(state.pointerId)?.kind === "touch";
       if (state.mode === "Draw" && !discard) return [];
       state = { mode: "Pinch" };
@@ -70,9 +80,23 @@ export function createGestures(): Gestures {
       return [];
     }
     if (event.button !== PRIMARY && event.button !== SECONDARY) return [];
+    if (event.kind === "touch") {
+      state = { mode: "Pending", pointerId: event.pointerId, point: event.point, time: event.time };
+      return [];
+    }
     state = { mode: "Draw", pointerId: event.pointerId };
-    return [{ type: "StartStroke", secondary: event.button === SECONDARY }];
+    return [{ type: "StartStroke", secondary: event.button === SECONDARY, point: event.point }];
   };
+
+  const promote = (): Effect[] => {
+    if (state.mode !== "Pending") return [];
+    const { pointerId, point } = state;
+    state = { mode: "Draw", pointerId };
+    return [{ type: "StartStroke", secondary: false, point }];
+  };
+
+  const tick = (time: number): Effect[] =>
+    state.mode === "Pending" && time - state.time >= PENDING_MS ? promote() : [];
 
   const pinchEffect = (pointerId: number, point: Point): Effect[] => {
     const [first, second] = touchIds();
@@ -91,10 +115,18 @@ export function createGestures(): Gestures {
     return [{ type: "Pinch", from, to }];
   };
 
-  const move = (pointerId: number, point: Point): Effect[] => {
+  const move = (pointerId: number, point: Point, time: number): Effect[] => {
     const tracked = pointers.get(pointerId);
     if (!tracked) return [];
     const effects: Effect[] = [];
+    if (state.mode === "Pending" && state.pointerId === pointerId) {
+      const travelled = Math.hypot(point.x - state.point.x, point.y - state.point.y);
+      if (travelled <= PENDING_SLOP_PX && time - state.time < PENDING_MS) {
+        pointers.set(pointerId, { ...tracked, point });
+        return [];
+      }
+      effects.push(...promote());
+    }
     if (state.mode === "Draw" && state.pointerId === pointerId) {
       effects.push({ type: "ExtendStroke" });
     }
@@ -109,6 +141,10 @@ export function createGestures(): Gestures {
   const end = (pointerId: number, cancelled: boolean): Effect[] => {
     if (!pointers.delete(pointerId)) return [];
     const effects: Effect[] = [];
+    if (state.mode === "Pending" && state.pointerId === pointerId) {
+      if (!cancelled) effects.push(...promote());
+      else state = { mode: "Idle" };
+    }
     if (state.mode === "Draw" && state.pointerId === pointerId) {
       effects.push({ type: cancelled ? "DiscardStroke" : "CommitStroke" });
       state = touchIds().length > 0 ? { mode: "Pinch" } : { mode: "Idle" };
@@ -122,6 +158,7 @@ export function createGestures(): Gestures {
   return {
     down,
     move,
+    tick,
     up: (pointerId) => end(pointerId, false),
     cancel: (pointerId) => end(pointerId, true),
   };

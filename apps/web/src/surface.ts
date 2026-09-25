@@ -13,7 +13,7 @@ import {
 } from "./camera";
 import { isVisible } from "./culling";
 import { hitsStroke } from "./eraser";
-import { createGestures, type Effect, type PointerKind } from "./gesture";
+import { createGestures, type Effect, PENDING_MS, type PointerKind } from "./gesture";
 import {
   type Draft,
   draftScreenPath,
@@ -126,6 +126,7 @@ export function createSurface(
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingTimer: ReturnType<typeof setTimeout> | undefined;
   let cursors: RemoteCursor[] = [];
   let cursorSentAt = 0;
   const gestures = createGestures();
@@ -356,10 +357,12 @@ export function createSurface(
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
 
-  const addPoint = (event: PointerEvent) => {
+  const pressureOf = (event: PointerEvent): number =>
+    event.pointerType === "pen" ? Math.min(1, Math.max(0, event.pressure)) : 0.5;
+
+  const addPoint = (screen: Point, pressure: number) => {
     if (!draft) return;
-    const world = screenToWorld(camera, localPoint(event));
-    const pressure = event.pointerType === "pen" ? Math.min(1, Math.max(0, event.pressure)) : 0.5;
+    const world = screenToWorld(camera, screen);
     if (draft.points.length >= MAX_POINTS) {
       const last = draft.points.at(-1);
       const next: Draft = { ...draft, points: last ? [last] : [] };
@@ -372,18 +375,18 @@ export function createSurface(
   const pointerKind = (event: PointerEvent): PointerKind =>
     event.pointerType === "pen" || event.pointerType === "touch" ? event.pointerType : "mouse";
 
-  const apply = (effects: readonly Effect[], event: PointerEvent) => {
+  const apply = (effects: readonly Effect[], event?: PointerEvent) => {
     for (const effect of effects) {
       switch (effect.type) {
         case "StartStroke": {
           const tool = currentTool();
           if (tool.mode === "Select") {
-            startDrag(localPoint(event));
+            startDrag(effect.point);
             break;
           }
           if (tool.mode === "Eraser") {
             eraser = undefined;
-            eraseTo(localPoint(event));
+            eraseTo(effect.point);
             break;
           }
           draft = startDraft(
@@ -391,15 +394,16 @@ export function createSurface(
             tool.size,
             camera.zoom,
           );
-          addPoint(event);
+          addPoint(effect.point, event ? pressureOf(event) : 0.5);
           break;
         }
         case "ExtendStroke": {
+          if (!event) break;
           const samples = event.getCoalescedEvents?.() ?? [];
           for (const sample of samples.length > 0 ? samples : [event]) {
             if (drag) dragTo(localPoint(sample));
             else if (eraser) eraseTo(localPoint(sample));
-            else addPoint(sample);
+            else addPoint(localPoint(sample), pressureOf(sample));
           }
           break;
         }
@@ -433,15 +437,19 @@ export function createSurface(
         kind: pointerKind(event),
         button: event.button,
         point: localPoint(event),
+        time: event.timeStamp,
       },
       { panTool: currentTool().mode === "Pan", spaceDown },
     );
     apply(effects, event);
+    if (event.pointerType !== "touch") return;
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => apply(gestures.tick(performance.now())), PENDING_MS);
   };
 
   const onPointerMove = (event: PointerEvent) => {
     shareCursor(localPoint(event));
-    apply(gestures.move(event.pointerId, localPoint(event)), event);
+    apply(gestures.move(event.pointerId, localPoint(event), event.timeStamp), event);
   };
 
   const onPointerUp = (event: PointerEvent) => {
@@ -506,6 +514,7 @@ export function createSurface(
   return {
     dispose() {
       clearTimeout(settleTimer);
+      clearTimeout(pendingTimer);
       cancelAnimationFrame(frame);
       observer.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
