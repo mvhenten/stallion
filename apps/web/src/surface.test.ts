@@ -74,6 +74,14 @@ test("each frame paints the paper before any stroke", () => {
     commit: () => undefined,
     erase: () => undefined,
     objects,
+    history: {
+      undo: () => undefined,
+      redo: () => undefined,
+      checkpoint: () => undefined,
+      canUndo: false,
+      canRedo: false,
+      observe: () => () => undefined,
+    },
     awareness: undefined,
     close: () => Promise.resolve(),
   };

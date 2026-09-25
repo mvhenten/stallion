@@ -133,3 +133,72 @@ test("a put that changes the tile sends one move frame and keeps the object once
   expect(landed && tileKey(landed.tile)).toBe(target);
   expect(bob.objects.size).toBe(1);
 });
+
+test("undo reverts only the local stroke after another client's concurrent change", async () => {
+  const server = new TestServer();
+  const alice = open(server);
+  const bob = open(server);
+  await until(() => alice.status === "Open" && bob.status === "Open", "both sockets");
+  await settle();
+
+  alice.put(stroke("alice"));
+  alice.history.checkpoint();
+  bob.put(stroke("bob"));
+  await until(() => alice.objects.size === 2 && bob.objects.size === 2, "convergence");
+  expect(bob.history.canUndo).toBe(true);
+
+  alice.history.undo();
+  await until(() => bob.objects.size === 1, "bob to see the undo");
+  expect([...alice.objects.keys()]).toEqual(["bob"]);
+  expect(server.objectIds(TILE)).toEqual(["bob"]);
+  expect([alice.history.canUndo, alice.history.canRedo]).toEqual([false, true]);
+
+  bob.remove("bob");
+  alice.history.redo();
+  await until(() => bob.objects.has("alice") && !alice.objects.has("bob"), "redo and erase");
+  expect(server.objectIds(TILE)).toEqual(["alice"]);
+
+  bob.put(stroke("late"));
+  await until(() => alice.objects.has("late"), "alice to see bob's late stroke");
+  bob.remove("alice");
+  await until(() => !alice.objects.has("alice"), "alice to see bob erase her stroke");
+  alice.history.undo();
+  await settle();
+  expect(server.objectIds(TILE)).toEqual(["late"]);
+  expect([...alice.objects.keys()]).toEqual(["late"]);
+  expect(alice.history.canUndo).toBe(false);
+});
+
+test("undo of a cross-tile move returns the object to its original tile in one move frame", async () => {
+  const server = new TestServer();
+  const alice = open(server);
+  const bob = open(server);
+  await until(() => alice.status === "Open" && bob.status === "Open", "both sockets");
+  await settle();
+  alice.put(stroke("mover"));
+  alice.history.checkpoint();
+  await until(() => bob.objects.has("mover"), "bob to see the stroke");
+
+  const moved = stroke("mover", { minX: 300, minY: 10, maxX: 490, maxY: 200 });
+  const target = tileKey(moved.tile);
+  alice.put(moved);
+  alice.history.checkpoint();
+  await until(() => server.objectIds(target).length === 1, "the server to take the move");
+
+  alice.history.undo();
+  await until(() => server.objectIds(TILE).length === 1, "the server to take the undo");
+  await settle();
+
+  const [aliceSession] = server.sessions;
+  const moves = (aliceSession?.received ?? []).filter((frame) => frame.kind === "Move");
+  expect(moves).toHaveLength(2);
+  const undone = moves[1] && decodeMove(moves[1].payload);
+  expect(undone?.ok && [undone.value.fromTile, undone.value.toTile]).toEqual([target, TILE]);
+  expect(server.objectIds(target)).toEqual([]);
+  for (const board of [alice, bob]) {
+    const landed = board.objects.get("mover");
+    expect(landed && tileKey(landed.tile)).toBe(TILE);
+    expect(board.objects.size).toBe(1);
+  }
+  expect([alice.history.canUndo, alice.history.canRedo]).toEqual([true, true]);
+});

@@ -45,6 +45,7 @@ export type BoardStatus = "Connecting" | "Open" | "Offline" | "Closed";
 export type BoardError = { tileKey: string; reason: string };
 
 export type BoardOptions = {
+  localOnly?: boolean;
   connect?: Connect;
   cache?: TileCacheOptions;
   backoff?: { initialMs: number; maxMs: number };
@@ -52,21 +53,47 @@ export type BoardOptions = {
   onStatus?: (status: BoardStatus) => void;
 };
 
+export type History = {
+  undo(): void;
+  redo(): void;
+  checkpoint(): void;
+  readonly canUndo: boolean;
+  readonly canRedo: boolean;
+  observe(listener: () => void): () => void;
+};
+
 export type StallionBoard = {
   setView(viewport: BBox, zoom: number): void;
   put(stored: StoredObject): void;
   remove(objectId: string): void;
   readonly objects: LiveObjects;
+  readonly history: History;
   readonly awareness: Awareness;
   readonly status: BoardStatus;
   close(): Promise<void>;
 };
 
-type TileEntry = { tile: Tile; key: string; doc: Y.Doc; explicit: boolean };
+type TileEntry = {
+  tile: Tile;
+  key: string;
+  doc: Y.Doc;
+  undo: Y.UndoManager;
+  explicit: boolean;
+};
+
+type Part = { key: string; item: Y.UndoManager["undoStack"][number] };
+
+type Change = {
+  objectId: string;
+  before: string | undefined;
+  after: string | undefined;
+  parts: Part[];
+};
 
 type View = { viewport: BBox; zoom: number; tiles: ViewTiles };
 
 const REMOTE = Symbol("remote");
+const LOCAL = Symbol("local");
 const CACHED = Symbol("cached");
 const MOVED = Symbol("moved");
 const OBJECTS = "objects";
@@ -114,6 +141,11 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   let attempt = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let chain: Promise<void> = Promise.resolve();
+  let undoSteps: Change[][] = [];
+  let redoSteps: Change[][] = [];
+  let openStep: Change[] = [];
+  const historyListeners = new Set<() => void>();
+  const routed = new Set<Y.UndoManager>();
 
   const report = (tileKey: string, reason: string): void => {
     if (!options.onError) throw new Error(`Board ${boardId}, tile "${tileKey}": ${reason}`);
@@ -167,6 +199,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   };
 
   const sendLocalUpdate = (entry: TileEntry, update: Uint8Array): void => {
+    if (options.localOnly) return;
     if (status !== "Open") {
       withCache((cache) => cache.enqueue(entry.tile, update), "Could not queue an offline edit");
       return;
@@ -209,7 +242,9 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     entry.doc.on("update", (update: Uint8Array, origin: unknown) => {
       if (origin === CACHED) return;
       schedulePersist(entry.key);
-      if (origin !== REMOTE && origin !== MOVED) sendLocalUpdate(entry, update);
+      if (origin === REMOTE || origin === MOVED) return;
+      if (origin instanceof Y.UndoManager && routed.has(origin)) return;
+      sendLocalUpdate(entry, update);
     });
   };
 
@@ -222,7 +257,12 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     const key = tileKey(tile);
     const existing = entries.get(key);
     if (existing) return existing;
-    const entry: TileEntry = { tile, key, doc: new Y.Doc(), explicit: false };
+    const doc = new Y.Doc();
+    const undo = new Y.UndoManager(doc.getMap(OBJECTS), {
+      trackedOrigins: new Set([LOCAL, MOVED]),
+      captureTimeout: 0,
+    });
+    const entry: TileEntry = { tile, key, doc, undo, explicit: false };
     entries.set(key, entry);
     track(entry);
     return entry;
@@ -230,6 +270,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
 
   const drop = (entry: TileEntry): void => {
     entries.delete(entry.key);
+    forget(entry.key);
     if (entry.explicit) send(entry.key, "Unsubscribe");
     const changed = new Set<string>();
     for (const objectId of entry.doc.getMap(OBJECTS).keys()) {
@@ -242,6 +283,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
       const state = Y.encodeStateAsUpdate(entry.doc);
       withCache((cache) => cache.save(entry.tile, state), "Could not cache tile state");
     }
+    entry.undo.destroy();
     entry.doc.destroy();
     notify(changed);
   };
@@ -397,14 +439,14 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     send(entry.key, "Subscribe");
   };
 
-  const move = (
+  const sendMove = (
     source: TileEntry,
     target: TileEntry,
     objectId: string,
-    bytes: Uint8Array,
+    fromUpdate: Uint8Array<ArrayBuffer>,
+    toUpdate: Uint8Array<ArrayBuffer>,
   ): void => {
-    const fromUpdate = edit(source, (objects) => objects.delete(objectId));
-    const toUpdate = edit(target, (objects) => objects.set(objectId, bytes));
+    if (options.localOnly) return;
     if (status !== "Open") {
       withCache(async (cache) => {
         await cache.enqueue(source.tile, fromUpdate);
@@ -421,23 +463,164 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     );
   };
 
+  const move = (
+    source: TileEntry,
+    target: TileEntry,
+    objectId: string,
+    bytes: Uint8Array,
+  ): void => {
+    const fromUpdate = edit(source, (objects) => objects.delete(objectId));
+    const toUpdate = edit(target, (objects) => objects.set(objectId, bytes));
+    sendMove(source, target, objectId, fromUpdate, toUpdate);
+  };
+
+  const notifyHistory = (): void => {
+    for (const listener of historyListeners) listener();
+  };
+
+  const locate = (objectId: string): string | undefined => {
+    const stored = objectMap.get(objectId);
+    return stored && tileKey(stored.tile);
+  };
+
+  const record = (objectId: string, before: string | undefined, touched: TileEntry[]): void => {
+    const parts = touched.flatMap((entry) => {
+      const item = entry.undo.undoStack.pop();
+      return item ? [{ key: entry.key, item }] : [];
+    });
+    if (parts.length === 0) return;
+    openStep.push({ objectId, before, after: locate(objectId), parts });
+    redoSteps = [];
+    notifyHistory();
+  };
+
+  const checkpoint = (): void => {
+    if (openStep.length === 0) return;
+    undoSteps.push(openStep);
+    openStep = [];
+  };
+
+  const forget = (key: string): void => {
+    const keep = (step: Change[]): Change[] =>
+      step.filter((change) => change.parts.every((part) => part.key !== key));
+    openStep = keep(openStep);
+    undoSteps = undoSteps.map(keep).filter((step) => step.length > 0);
+    redoSteps = redoSteps.map(keep).filter((step) => step.length > 0);
+    notifyHistory();
+  };
+
+  const replay = (
+    undo: Y.UndoManager,
+    part: Part,
+    direction: "Undo" | "Redo",
+  ): Part | undefined => {
+    if (direction === "Undo") {
+      undo.undoStack = [part.item];
+      undo.undo();
+      undo.undoStack = [];
+      const item = undo.redoStack.pop();
+      return item && { key: part.key, item };
+    }
+    undo.redoStack = [part.item];
+    undo.redo();
+    undo.redoStack = [];
+    const item = undo.undoStack.pop();
+    return item && { key: part.key, item };
+  };
+
+  const revert = (change: Change, direction: "Undo" | "Redo"): Change | undefined => {
+    const expected = direction === "Undo" ? change.after : change.before;
+    if (locate(change.objectId) !== expected) return undefined;
+    const ordered = direction === "Undo" ? [...change.parts].reverse() : change.parts;
+    const touched = ordered.flatMap((part) => {
+      const entry = entries.get(part.key);
+      return entry ? [{ entry, part }] : [];
+    });
+    const updates = new Map<TileEntry, Uint8Array<ArrayBuffer>>();
+    const captures = touched.map(({ entry }) => {
+      const capture = (update: Uint8Array, origin: unknown): void => {
+        if (origin === entry.undo) updates.set(entry, new Uint8Array(update));
+      };
+      entry.doc.on("update", capture);
+      return () => entry.doc.off("update", capture);
+    });
+    const crossTile = touched.length === 2;
+    if (crossTile) for (const { entry } of touched) routed.add(entry.undo);
+    const parts = touched.flatMap(({ entry, part }) => {
+      const next = replay(entry.undo, part, direction);
+      return next ? [next] : [];
+    });
+    for (const release of captures) release();
+    routed.clear();
+    const [from, to] = touched;
+    if (crossTile && from && to) {
+      const fromUpdate = updates.get(from.entry);
+      const toUpdate = updates.get(to.entry);
+      if (fromUpdate && toUpdate) {
+        sendMove(from.entry, to.entry, change.objectId, fromUpdate, toUpdate);
+      } else {
+        for (const [entry, update] of updates) sendLocalUpdate(entry, update);
+      }
+    }
+    if (parts.length !== change.parts.length) return undefined;
+    const restored = direction === "Undo" ? [...parts].reverse() : parts;
+    return { ...change, parts: restored };
+  };
+
+  const step = (direction: "Undo" | "Redo"): void => {
+    checkpoint();
+    const from = direction === "Undo" ? undoSteps : redoSteps;
+    const into = direction === "Undo" ? redoSteps : undoSteps;
+    const changes = from.pop();
+    if (!changes) return;
+    const ordered = direction === "Undo" ? [...changes].reverse() : changes;
+    const applied = ordered.flatMap((change) => {
+      const next = revert(change, direction);
+      return next ? [next] : [];
+    });
+    if (applied.length > 0) into.push(direction === "Undo" ? applied.reverse() : applied);
+    notifyHistory();
+  };
+
+  const history: History = {
+    undo: () => step("Undo"),
+    redo: () => step("Redo"),
+    checkpoint,
+    get canUndo() {
+      return undoSteps.length > 0 || openStep.length > 0;
+    },
+    get canRedo() {
+      return redoSteps.length > 0;
+    },
+    observe(listener: () => void): () => void {
+      historyListeners.add(listener);
+      return () => historyListeners.delete(listener);
+    },
+  };
+
   const put = (stored: StoredObject): void => {
     const { objectId } = stored.object;
     const bytes = new Uint8Array(encode(stored.object));
+    const before = locate(objectId);
     const previous = objectMap.get(objectId);
     const target = entryFor(stored.tile);
     const source = previous && entries.get(tileKey(previous.tile));
     if (source && source !== target) {
       move(source, target, objectId, bytes);
+      record(objectId, before, [source, target]);
       return;
     }
-    target.doc.getMap<Uint8Array>(OBJECTS).set(objectId, bytes);
+    target.doc.transact(() => target.doc.getMap<Uint8Array>(OBJECTS).set(objectId, bytes), LOCAL);
+    record(objectId, before, [target]);
   };
 
   const remove = (objectId: string): void => {
     const stored = objectMap.get(objectId);
-    if (!stored) return;
-    entries.get(tileKey(stored.tile))?.doc.getMap(OBJECTS).delete(objectId);
+    const entry = stored && entries.get(tileKey(stored.tile));
+    if (!entry) return;
+    const before = locate(objectId);
+    entry.doc.transact(() => entry.doc.getMap(OBJECTS).delete(objectId), LOCAL);
+    record(objectId, before, [entry]);
   };
 
   const close = async (): Promise<void> => {
@@ -448,6 +631,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     socket?.close();
     socket = undefined;
     for (const entry of [...entries.values()]) drop(entry);
+    historyListeners.clear();
     awareness.destroy();
     await chain;
     (await cacheReady).close();
@@ -460,13 +644,15 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     },
   });
 
-  open();
+  if (options.localOnly) setStatus("Offline");
+  else open();
 
   return {
     setView,
     put,
     remove,
     objects,
+    history,
     awareness,
     get status() {
       return status;
