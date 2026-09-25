@@ -5,5 +5,17 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@stallion/client-store": "*",
+    "@stallion/geometry": "*",
+    "@stallion/schema": "*",
+    "cbor-x": "^1.6.6",
+    "lib0": "^0.2.118",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5"
   }
 }
