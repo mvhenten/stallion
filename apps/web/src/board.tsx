@@ -1,6 +1,8 @@
+import { openBoard } from "@stallion/client-sync";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { errorMessage, reportLink } from "./report";
 import { createSurface, type Tool, type ToolMode } from "./surface";
+import { type Connection, openSource } from "./sync";
 import { Toolbar } from "./toolbar";
 
 const SURFACE_CLASS: Record<ToolMode, string> = {
@@ -18,18 +20,34 @@ export function Board({ boardId }: { boardId: string }) {
     mode: "Pencil",
   });
   const [error, setError] = useState<string | undefined>(undefined);
+  const [connection, setConnection] = useState<Connection>("LocalOnly");
   const toolRef = useRef(tool);
   toolRef.current = tool;
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const source = openSource({
+      url: import.meta.env.VITE_SYNC_URL,
+      boardId,
+      openBoard,
+      onConnection: setConnection,
+      onError: setError,
+    });
+    let surface: ReturnType<typeof createSurface> | undefined;
     try {
-      const surface = createSurface(canvas, boardId, () => toolRef.current, setError);
-      return () => surface.dispose();
+      surface = createSurface(canvas, boardId, source, () => toolRef.current);
     } catch (failure) {
       setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
     }
+    return () => {
+      surface?.dispose();
+      source
+        .close()
+        .catch((failure: unknown) =>
+          setError(`Could not close the board: ${errorMessage(failure)}`),
+        );
+    };
   }, [boardId]);
 
   return (
@@ -39,7 +57,7 @@ export function Board({ boardId }: { boardId: string }) {
         class={SURFACE_CLASS[tool.mode]}
         aria-label={`Drawing board ${boardId}`}
       />
-      <Toolbar tool={tool} onChange={setTool} />
+      <Toolbar tool={tool} onChange={setTool} connection={connection} />
       {error && (
         <div class="error" role="alert">
           <p>{error}. Strokes may not be saved; reload to try again.</p>

@@ -1,5 +1,5 @@
-import { type BoardStore, openBoardStore, type StoredObject } from "@stallion/client-store";
-import { type Point, type Tile, tileBounds, viewTiles } from "@stallion/geometry";
+import type { StoredObject } from "@stallion/client-store";
+import { type Point, type Tile, tileBounds } from "@stallion/geometry";
 import type { PencilSize, Stroke } from "@stallion/schema";
 import {
   type Camera,
@@ -24,6 +24,7 @@ import {
   startDraft,
   strokeLocalPath,
 } from "./stroke";
+import type { BoardSource } from "./sync";
 
 export type ToolMode = "Pencil" | "Pan" | "Eraser";
 
@@ -40,6 +41,25 @@ const BLOCKED_TOUCH_EVENTS = [
 ] as const;
 
 const ERASER_STEP_PX = 4;
+
+const CURSOR_THROTTLE_MS = 50;
+
+type RemoteCursor = { x: number; y: number; name: string; colour: string };
+
+const remoteCursor = (clientId: number, state: unknown): RemoteCursor | undefined => {
+  if (typeof state !== "object" || state === null) return undefined;
+  const { cursor, user } = state as Record<string, unknown>;
+  if (typeof cursor !== "object" || cursor === null) return undefined;
+  const { x, y } = cursor as Record<string, unknown>;
+  if (typeof x !== "number" || typeof y !== "number") return undefined;
+  const name =
+    typeof user === "object" &&
+    user !== null &&
+    typeof (user as { name?: unknown }).name === "string"
+      ? (user as { name: string }).name
+      : "Guest";
+  return { x, y, name, colour: PALETTE[clientId % PALETTE.length] ?? PALETTE[0] };
+};
 
 const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
 
@@ -81,8 +101,8 @@ export type Surface = { dispose(): void };
 export function createSurface(
   canvas: HTMLCanvasElement,
   boardId: string,
+  source: BoardSource,
   currentTool: () => Tool,
-  onError: (message: string) => void,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -93,18 +113,13 @@ export function createSurface(
   let camera = loadCamera(boardId);
   let draft: Draft | undefined;
   let eraser: Point | undefined;
-  const erased = new Set<string>();
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let cursors: RemoteCursor[] = [];
+  let cursorSentAt = 0;
   const gestures = createGestures();
-
-  const fail = (action: string) => (error: unknown) => {
-    onError(`${action}: ${error instanceof Error ? error.message : String(error)}`);
-  };
-
-  const storeReady: Promise<BoardStore> = openBoardStore(boardId);
-  storeReady.catch(fail("Could not open the local board storage"));
+  const awareness = source.awareness;
 
   const size = () => ({ width: canvas.clientWidth, height: canvas.clientHeight });
 
@@ -135,6 +150,21 @@ export function createSurface(
       ctx.fillStyle = PALETTE[draft.colour] ?? PALETTE[0];
       ctx.fill(draftScreenPath(draft, (world) => worldToScreen(camera, world), camera.zoom));
     }
+    if (cursors.length > 0) renderCursors(dpr);
+  };
+
+  const renderCursors = (dpr: number) => {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    for (const cursor of cursors) {
+      const { x, y } = worldToScreen(camera, cursor);
+      ctx.fillStyle = cursor.colour;
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillText(cursor.name, x + 9, y);
+    }
   };
 
   const requestRender = () => {
@@ -150,26 +180,14 @@ export function createSurface(
   };
 
   const add = ({ tile, object }: StoredObject) => {
-    if (object.type !== "Stroke" || entries.has(object.objectId) || erased.has(object.objectId)) {
-      return;
-    }
+    if (object.type !== "Stroke") return;
     const entry = { tile, stroke: object, path: strokeLocalPath(tile, object) };
+    const previous = entries.get(object.objectId);
     entries.set(object.objectId, entry);
-    const index = ordered.findIndex((other) => other.stroke.objectId > object.objectId);
+    const rest = previous ? ordered.filter((other) => other !== previous) : ordered;
+    const index = rest.findIndex((other) => other.stroke.objectId > object.objectId);
     ordered =
-      index === -1
-        ? [...ordered, entry]
-        : [...ordered.slice(0, index), entry, ...ordered.slice(index)];
-  };
-
-  const erase = (entry: Entry) => {
-    const { objectId } = entry.stroke;
-    erased.add(objectId);
-    entries.delete(objectId);
-    ordered = ordered.filter((other) => other !== entry);
-    storeReady
-      .then((store) => store.remove(objectId, entry.tile))
-      .catch(fail("Could not delete the stroke from local storage"));
+      index === -1 ? [...rest, entry] : [...rest.slice(0, index), entry, ...rest.slice(index)];
   };
 
   const eraseAt = (screen: Point) => {
@@ -178,7 +196,8 @@ export function createSurface(
     const world = screenToWorld(camera, screen);
     for (const entry of ordered) {
       if (!isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
-      if (hitsStroke(entry.tile, entry.stroke, world, camera.zoom)) erase(entry);
+      if (hitsStroke(entry.tile, entry.stroke, world, camera.zoom))
+        source.erase(entry.stroke.objectId);
     }
   };
 
@@ -195,24 +214,53 @@ export function createSurface(
     eraser = screen;
   };
 
-  const loadView = () => {
+  const discard = (objectId: string) => {
+    const entry = entries.get(objectId);
+    if (!entry) return;
+    entries.delete(objectId);
+    ordered = ordered.filter((other) => other !== entry);
+  };
+
+  const onObjects = (changed: ReadonlySet<string>) => {
+    for (const objectId of changed) {
+      const stored = source.objects.get(objectId);
+      if (stored) add(stored);
+      else discard(objectId);
+    }
+    requestRender();
+  };
+
+  const onAwareness = () => {
+    if (!awareness) return;
+    cursors = [...awareness.getStates()].flatMap(([clientId, state]) => {
+      if (clientId === awareness.clientID) return [];
+      const cursor = remoteCursor(clientId, state);
+      return cursor ? [cursor] : [];
+    });
+    requestRender();
+  };
+
+  const shareCursor = (screen: Point | undefined) => {
+    if (!awareness) return;
+    if (!screen) {
+      awareness.setLocalStateField("cursor", null);
+      return;
+    }
+    const now = performance.now();
+    if (now - cursorSentAt < CURSOR_THROTTLE_MS) return;
+    cursorSentAt = now;
+    awareness.setLocalStateField("cursor", screenToWorld(camera, screen));
+  };
+
+  const updateView = () => {
     const { width, height } = size();
-    const view = viewTiles(viewBounds(camera, width, height), camera.zoom);
-    storeReady
-      .then((store) => store.query([...view.live, ...view.snapshot]))
-      .then((found) => {
-        for (const stored of found) add(stored);
-        requestRender();
-      })
-      .catch(fail("Could not load the board from local storage"));
+    source.view(viewBounds(camera, width, height), camera.zoom);
   };
 
   const settle = () => {
     clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      saveCamera(boardId, camera);
-      loadView();
-    }, 150);
+    settleTimer = setTimeout(() => saveCamera(boardId, camera), 150);
+    updateView();
   };
 
   const moveCamera = (next: Camera) => {
@@ -227,10 +275,7 @@ export function createSurface(
     const stored = finishDraft(draft);
     draft = undefined;
     if (!stored) return;
-    add(stored);
-    storeReady
-      .then((store) => store.put(stored))
-      .catch(fail("Could not save the stroke to local storage"));
+    source.commit(stored);
   };
 
   const localPoint = (event: PointerEvent | WheelEvent): Point => {
@@ -315,6 +360,7 @@ export function createSurface(
   };
 
   const onPointerMove = (event: PointerEvent) => {
+    shareCursor(localPoint(event));
     apply(gestures.move(event.pointerId, localPoint(event)), event);
   };
 
@@ -338,7 +384,12 @@ export function createSurface(
     spaceDown = event.type === "keydown";
   };
 
+  const onPointerLeave = () => shareCursor(undefined);
+
   const preventDefault = (event: Event) => event.preventDefault();
+
+  const unobserve = source.objects.observe(onObjects);
+  awareness?.on("change", onAwareness);
 
   const observer = new ResizeObserver(() => {
     resize();
@@ -350,6 +401,7 @@ export function createSurface(
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerCancel);
+  canvas.addEventListener("pointerleave", onPointerLeave);
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", preventDefault);
   for (const type of BLOCKED_TOUCH_EVENTS) {
@@ -359,7 +411,9 @@ export function createSurface(
   window.addEventListener("keyup", onKey);
 
   resize();
-  loadView();
+  onObjects(new Set(source.objects.keys()));
+  onAwareness();
+  updateView();
 
   return {
     dispose() {
@@ -370,13 +424,15 @@ export function createSurface(
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerCancel);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", preventDefault);
       for (const type of BLOCKED_TOUCH_EVENTS) canvas.removeEventListener(type, preventDefault);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
+      unobserve();
+      awareness?.off("change", onAwareness);
       saveCamera(boardId, camera);
-      storeReady.then((store) => store.close()).catch(() => undefined);
     },
   };
 }
