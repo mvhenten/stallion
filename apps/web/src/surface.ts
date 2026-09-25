@@ -1,5 +1,5 @@
 import type { StoredObject } from "@stallion/client-store";
-import { type Point, type Tile, tileBounds } from "@stallion/geometry";
+import type { Point, Tile } from "@stallion/geometry";
 import type { PencilSize, Stroke } from "@stallion/schema";
 import {
   type Camera,
@@ -18,11 +18,12 @@ import {
   type Draft,
   draftScreenPath,
   finishDraft,
-  localScale,
   MAX_POINTS,
   PALETTE,
+  type StrokeFrame,
   startDraft,
-  strokeLocalPath,
+  strokeFrame,
+  strokeFramePath,
 } from "./stroke";
 import type { BoardSource } from "./sync";
 
@@ -30,7 +31,7 @@ export type ToolMode = "Pencil" | "Pan" | "Eraser";
 
 export type Tool = { size: PencilSize; primary: number; secondary: number; mode: ToolMode };
 
-type Entry = { tile: Tile; stroke: Stroke; path: Path2D };
+type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; path: Path2D };
 
 const BLOCKED_TOUCH_EVENTS = [
   "touchstart",
@@ -135,15 +136,15 @@ export function createSurface(
     const view = viewBounds(camera, width, height);
     for (const entry of ordered) {
       if (!isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
-      const origin = tileBounds(entry.tile);
-      const scale = localScale(entry.tile) * camera.zoom * dpr;
+      const { origin } = entry.frame;
+      const scale = entry.frame.scale * camera.zoom * dpr;
       ctx.setTransform(
         scale,
         0,
         0,
         scale,
-        (origin.minX - camera.x) * camera.zoom * dpr,
-        (origin.minY - camera.y) * camera.zoom * dpr,
+        (origin.x - camera.x) * camera.zoom * dpr,
+        (origin.y - camera.y) * camera.zoom * dpr,
       );
       ctx.fillStyle = PALETTE[entry.stroke.colour] ?? PALETTE[0];
       ctx.fill(entry.path);
@@ -184,7 +185,8 @@ export function createSurface(
 
   const add = ({ tile, object }: StoredObject) => {
     if (object.type !== "Stroke") return;
-    const entry = { tile, stroke: object, path: strokeLocalPath(tile, object) };
+    const frame = strokeFrame(tile, object);
+    const entry = { tile, stroke: object, frame, path: strokeFramePath(object, frame) };
     const previous = entries.get(object.objectId);
     entries.set(object.objectId, entry);
     const rest = previous ? ordered.filter((other) => other !== previous) : ordered;
