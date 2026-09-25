@@ -3,6 +3,7 @@ use std::cell::Cell;
 use worker::{SqlStorage, SqlStorageValue};
 
 use crate::object::Bbox;
+use crate::view::LevelRange;
 
 pub type TileCoord = (i32, i64, i64);
 
@@ -14,10 +15,38 @@ pub struct TileRecord {
     pub objects: Vec<(String, Bbox)>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TileSnapshot {
+    pub coord: TileCoord,
+    pub doc_state: Vec<u8>,
+    pub objects: usize,
+}
+
 pub trait TileStore {
     fn load(&self, coord: TileCoord) -> Result<Option<Vec<u8>>, String>;
     fn save(&self, record: &TileRecord) -> Result<(), String>;
+    /// Tiles in `range` that hold objects, nearest to `center` first, cut before the
+    /// running object count passes `budget`.
+    fn range(
+        &self,
+        range: &LevelRange,
+        center: (i64, i64),
+        budget: usize,
+    ) -> Result<Vec<TileSnapshot>, String>;
 }
+
+const RANGE_QUERY: &str = "SELECT c.tx, c.ty, t.doc_state, c.n FROM (
+        SELECT tx, ty, n, SUM(n) OVER (ORDER BY ring, ty, tx ROWS UNBOUNDED PRECEDING) AS running
+        FROM (
+            SELECT tx, ty, COUNT(*) AS n, MAX(ABS(tx - ?), ABS(ty - ?)) AS ring
+            FROM object_index
+            WHERE level = ? AND tx BETWEEN ? AND ? AND ty BETWEEN ? AND ?
+            GROUP BY tx, ty
+        )
+    ) c
+    JOIN tile t ON t.level = ? AND t.tx = c.tx AND t.ty = c.ty
+    WHERE c.running <= ?
+    ORDER BY c.running";
 
 pub const MIGRATIONS: &[&[&str]] = &[&[
     "CREATE TABLE tile (
@@ -159,5 +188,53 @@ impl TileStore for SqlTileStore {
             )?;
         }
         Ok(())
+    }
+
+    fn range(
+        &self,
+        range: &LevelRange,
+        (cx, cy): (i64, i64),
+        budget: usize,
+    ) -> Result<Vec<TileSnapshot>, String> {
+        self.migrate()?;
+        let budget = i64::try_from(budget).map_err(|e| e.to_string())?;
+        let bindings: Vec<SqlStorageValue> = vec![
+            cx.into(),
+            cy.into(),
+            range.level.into(),
+            range.min_tx.into(),
+            range.max_tx.into(),
+            range.min_ty.into(),
+            range.max_ty.into(),
+            range.level.into(),
+            budget.into(),
+        ];
+        let cursor = self
+            .sql
+            .exec(RANGE_QUERY, bindings)
+            .map_err(|e| e.to_string())?;
+        let mut tiles = Vec::new();
+        for row in cursor.raw() {
+            let row = row.map_err(|e| e.to_string())?;
+            let [
+                SqlStorageValue::Integer(tx),
+                SqlStorageValue::Integer(ty),
+                SqlStorageValue::Blob(doc_state),
+                SqlStorageValue::Integer(objects),
+            ] = <[SqlStorageValue; 4]>::try_from(row)
+                .map_err(|row| format!("range query returned {row:?}"))?
+            else {
+                return Err(format!(
+                    "range query at level {} returned a malformed row",
+                    range.level
+                ));
+            };
+            tiles.push(TileSnapshot {
+                coord: (range.level, tx, ty),
+                doc_state,
+                objects: usize::try_from(objects).map_err(|e| e.to_string())?,
+            });
+        }
+        Ok(tiles)
     }
 }

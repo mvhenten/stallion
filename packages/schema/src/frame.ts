@@ -1,7 +1,15 @@
 import { Encoder } from "cbor-x";
 import { z } from "zod";
 
-export const frameKind = z.enum(["Subscribe", "Unsubscribe", "Sync", "Awareness", "Reject"]);
+export const frameKind = z.enum([
+  "Subscribe",
+  "Unsubscribe",
+  "Sync",
+  "Awareness",
+  "Reject",
+  "View",
+  "Snapshot",
+]);
 
 export const frame = z.strictObject({
   tileKey: z.string(),
