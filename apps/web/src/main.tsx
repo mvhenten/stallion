@@ -1,7 +1,9 @@
-import { render } from "preact";
-import { App } from "./app";
-import "./styles.css";
+import { boot, showBootFailure } from "./boot";
 
 const root = document.getElementById("app");
 if (!root) throw new Error("Missing #app root element in index.html");
-render(<App />, root);
+boot(
+  root,
+  () => import("./mount"),
+  (message) => showBootFailure(root, message),
+);

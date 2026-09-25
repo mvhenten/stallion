@@ -156,7 +156,10 @@ export function createSurface(
     const entry = { tile, stroke: object, path: strokeLocalPath(tile, object) };
     entries.set(object.objectId, entry);
     const index = ordered.findIndex((other) => other.stroke.objectId > object.objectId);
-    ordered = index === -1 ? [...ordered, entry] : ordered.toSpliced(index, 0, entry);
+    ordered =
+      index === -1
+        ? [...ordered, entry]
+        : [...ordered.slice(0, index), entry, ...ordered.slice(index)];
   };
 
   const erase = (entry: Entry) => {
