@@ -1,20 +1,13 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { errorMessage, reportLink } from "./report";
 import { createSurface, type Tool, type ToolMode } from "./surface";
 import { Toolbar } from "./toolbar";
-
-const ISSUE_URL = "https://github.com/mvhenten/stallion/issues/new";
 
 const SURFACE_CLASS: Record<ToolMode, string> = {
   Pencil: "surface",
   Pan: "surface panning",
   Eraser: "surface erasing",
 };
-
-const reportLink = (message: string): string =>
-  `${ISSUE_URL}?${new URLSearchParams({
-    title: "Drawing board error",
-    body: `${message}\n\nBrowser: ${navigator.userAgent}`,
-  })}`;
 
 export function Board({ boardId }: { boardId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -31,8 +24,12 @@ export function Board({ boardId }: { boardId: string }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const surface = createSurface(canvas, boardId, () => toolRef.current, setError);
-    return () => surface.dispose();
+    try {
+      const surface = createSurface(canvas, boardId, () => toolRef.current, setError);
+      return () => surface.dispose();
+    } catch (failure) {
+      setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
+    }
   }, [boardId]);
 
   return (
