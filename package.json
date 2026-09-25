@@ -21,6 +21,7 @@
     "build": "npm run build --workspaces --if-present",
     "build:worker": "cd crates/server && worker-build --release",
     "smoke": "node npm-scripts/smoke.mjs",
+    "demo:duo": "node npm-scripts/duo-demo.mjs",
     "serve:sync": "VITE_SYNC_URL=${VITE_SYNC_URL:-ws://100.104.44.51:8787} npm run build -w @stallion/web && wrangler dev --ip 0.0.0.0 --port 8787",
     "deploy:dry": "wrangler deploy --dry-run --outdir ~/development/.tmp/stallion-dry"
   },
