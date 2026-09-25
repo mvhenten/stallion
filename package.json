@@ -20,10 +20,13 @@
     "test:rust": "cargo test --workspace",
     "build": "npm run build --workspaces --if-present",
     "build:worker": "cd crates/server && worker-build --release",
+    "smoke": "node npm-scripts/smoke.mjs",
+    "serve:sync": "VITE_SYNC_URL=${VITE_SYNC_URL:-ws://100.104.44.51:8787} npm run build -w @stallion/web && wrangler dev --ip 0.0.0.0 --port 8787",
     "deploy:dry": "wrangler deploy --dry-run --outdir ~/development/.tmp/stallion-dry"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
+    "playwright": "^1.63.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.141.0"
