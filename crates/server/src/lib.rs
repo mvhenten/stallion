@@ -3,6 +3,7 @@ pub mod board;
 pub mod frame;
 pub mod object;
 pub mod store;
+pub mod view;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

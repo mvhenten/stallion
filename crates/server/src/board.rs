@@ -8,16 +8,29 @@ use yrs::updates::encoder::Encode;
 use yrs::{Any, ClientID, Doc, Map, Out, ReadTxn, StateVector, Transact, Update};
 
 use crate::frame::{BOARD_KEY, Frame, FrameKind, parse_tile_key};
-use crate::store::{TileRecord, TileStore};
+use crate::store::{TileCoord, TileRecord, TileStore};
+use crate::view::{OBJECT_BUDGET, Viewport};
 
 pub const OBJECTS: &str = "objects";
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub tiles: BTreeSet<String>,
     pub clients: BTreeSet<u64>,
     #[serde(default)]
     pub user: String,
+    #[serde(default)]
+    pub view: Option<Viewport>,
+}
+
+impl Session {
+    pub fn subscribed(&self, key: &str) -> bool {
+        self.tiles.contains(key)
+            || self
+                .view
+                .as_ref()
+                .is_some_and(|view| parse_tile_key(key).is_ok_and(|coord| view.is_live(coord)))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +44,7 @@ impl Route {
     pub fn reaches(&self, is_sender: bool, session: &Session) -> bool {
         match self {
             Route::Sender => is_sender,
-            Route::Tile(key) => !is_sender && session.tiles.contains(key),
+            Route::Tile(key) => !is_sender && session.subscribed(key),
             Route::Board => !is_sender,
         }
     }
@@ -105,10 +118,20 @@ impl<S: TileStore> BoardSync<S> {
             tile.used_at = now;
             return Ok(tile.doc.clone());
         }
+        let state = self.store.load(parse_tile_key(key)?)?;
+        self.cache(key, state.as_deref())
+    }
+
+    fn cache(&mut self, key: &str, state: Option<&[u8]>) -> Result<Doc, String> {
+        let now = self.clock.now();
+        if let Some(tile) = self.tiles.get_mut(key) {
+            tile.used_at = now;
+            return Ok(tile.doc.clone());
+        }
         let doc = Doc::new();
-        if let Some(state) = self.store.load(parse_tile_key(key)?)? {
+        if let Some(state) = state {
             doc.transact_mut()
-                .apply_update(decode_update(&state)?)
+                .apply_update(decode_update(state)?)
                 .map_err(|e| e.to_string())?;
         }
         self.tiles.insert(
@@ -191,13 +214,57 @@ impl<S: TileStore> BoardSync<S> {
                     frame: Frame::new(BOARD_KEY, FrameKind::Awareness, payload),
                 }])
             }
-            FrameKind::Reject => Err("clients cannot send Reject".into()),
+            FrameKind::View => self.view(session, Viewport::decode(&frame.payload)?),
+            FrameKind::Reject | FrameKind::Snapshot => {
+                Err(format!("clients cannot send {:?}", frame.kind))
+            }
         }
+    }
+
+    fn view(&mut self, session: &mut Session, viewport: Viewport) -> Result<Vec<Outgoing>, String> {
+        let tiles = viewport.tiles()?;
+        self.flush()?;
+        let before = session.clone();
+        session.view = Some(viewport);
+        session
+            .tiles
+            .retain(|key| parse_tile_key(key).is_ok_and(|coord| viewport.is_live(coord)));
+        let bands = tiles
+            .live
+            .iter()
+            .map(|range| (range, true))
+            .chain(tiles.snapshot.iter().map(|range| (range, false)));
+        let mut remaining = OBJECT_BUDGET;
+        let mut outgoing = Vec::new();
+        for (range, live) in bands {
+            if remaining == 0 {
+                break;
+            }
+            for found in self.store.range(range, range.center(), remaining)? {
+                remaining = remaining.saturating_sub(found.objects);
+                let key = tile_key(found.coord);
+                if live && before.subscribed(&key) {
+                    continue;
+                }
+                if !live {
+                    outgoing.push(reply(Frame::new(key, FrameKind::Snapshot, found.doc_state)));
+                    continue;
+                }
+                let doc = self.cache(&key, Some(&found.doc_state))?;
+                let txn = doc.transact();
+                let state = txn.encode_state_as_update_v1(&StateVector::default());
+                let step1 = SyncMessage::SyncStep1(txn.state_vector()).encode_v1();
+                let step2 = SyncMessage::SyncStep2(state).encode_v1();
+                outgoing.push(reply(Frame::new(key.clone(), FrameKind::Sync, step1)));
+                outgoing.push(reply(Frame::new(key, FrameKind::Sync, step2)));
+            }
+        }
+        Ok(outgoing)
     }
 
     fn sync(&mut self, session: &Session, frame: Frame) -> Result<Vec<Outgoing>, String> {
         let key = frame.tile_key;
-        if !session.tiles.contains(&key) {
+        if !session.subscribed(&key) {
             return Err(format!("tile {key:?} is not subscribed"));
         }
         let doc = self.tile(&key)?;
@@ -278,6 +345,10 @@ fn stamp_user(update: &mut AwarenessUpdate, user: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn tile_key((level, tx, ty): TileCoord) -> String {
+    format!("{level}:{tx}:{ty}")
+}
+
 fn reply(frame: Frame) -> Outgoing {
     Outgoing {
         route: Route::Sender,
@@ -349,7 +420,8 @@ fn validate_entry(object_id: &str, value: &Out) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::object::tests::fixture;
-    use crate::store::TileCoord;
+    use crate::store::TileSnapshot;
+    use crate::view::LevelRange;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
@@ -361,6 +433,7 @@ mod tests {
     struct MemoryStore {
         rows: Rc<RefCell<HashMap<TileCoord, TileRecord>>>,
         saves: Rc<RefCell<usize>>,
+        queries: Rc<RefCell<Vec<i32>>>,
     }
 
     impl TileStore for MemoryStore {
@@ -373,6 +446,160 @@ mod tests {
             self.rows.borrow_mut().insert(record.coord, record.clone());
             Ok(())
         }
+
+        fn range(
+            &self,
+            range: &LevelRange,
+            (cx, cy): (i64, i64),
+            budget: usize,
+        ) -> Result<Vec<TileSnapshot>, String> {
+            self.queries.borrow_mut().push(range.level);
+            let rows = self.rows.borrow();
+            let mut found: Vec<&TileRecord> = rows
+                .values()
+                .filter(|r| range.contains(r.coord) && !r.objects.is_empty())
+                .collect();
+            found.sort_by_key(|r| {
+                let (_, tx, ty) = r.coord;
+                ((tx - cx).abs().max((ty - cy).abs()), ty, tx)
+            });
+            let mut running = 0;
+            Ok(found
+                .into_iter()
+                .take_while(|r| {
+                    running += r.objects.len();
+                    running <= budget
+                })
+                .map(|r| TileSnapshot {
+                    coord: r.coord,
+                    doc_state: r.doc_state.clone(),
+                    objects: r.objects.len(),
+                })
+                .collect())
+        }
+    }
+
+    fn view_frame(min_x: f64, min_y: f64, zoom: f64) -> Frame {
+        let viewport = Viewport {
+            min_x,
+            min_y,
+            max_x: min_x + 1024.0 / zoom,
+            max_y: min_y + 768.0 / zoom,
+            zoom,
+        };
+        let mut payload = Vec::new();
+        ciborium::into_writer(&viewport, &mut payload).unwrap();
+        Frame::new(BOARD_KEY, FrameKind::View, payload)
+    }
+
+    fn seed(store: &MemoryStore, coord: TileCoord, objects: usize) {
+        let state = Doc::new()
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        let bbox = crate::object::Bbox {
+            min_x: 0.0,
+            min_y: 0.0,
+            max_x: 1.0,
+            max_y: 1.0,
+        };
+        let record = TileRecord {
+            coord,
+            doc_state: state,
+            updated_at: 0,
+            objects: (0..objects)
+                .map(|i| (format!("o{i}"), bbox.clone()))
+                .collect(),
+        };
+        store.rows.borrow_mut().insert(coord, record);
+    }
+
+    #[test]
+    fn a_dense_view_stays_within_budget_and_keeps_coarse_objects() {
+        let store = MemoryStore::default();
+        let coarse = [
+            ((3, 0, 0), 2),
+            ((0, 1, 1), 3),
+            ((-1, 2, 2), 4),
+            ((-3, 5, 5), 5),
+        ];
+        for (coord, objects) in coarse {
+            seed(&store, coord, objects);
+        }
+        seed(&store, (0, 100, 100), 1);
+        for level in -8..=-4 {
+            for i in 0..40 {
+                seed(&store, (level, i, i), 200);
+            }
+        }
+        let mut board = BoardSync::new(|| 0, store.clone());
+        let mut session = Session::default();
+        let out = board
+            .receive(&mut session, view_frame(0.0, 0.0, 1.0))
+            .unwrap();
+
+        let rows = store.rows.borrow();
+        let mut delivered: BTreeSet<TileCoord> = BTreeSet::new();
+        for o in &out {
+            assert_eq!(o.route, Route::Sender);
+            delivered.insert(parse_tile_key(&o.frame.tile_key).unwrap());
+        }
+        let total: usize = delivered.iter().map(|c| rows[c].objects.len()).sum();
+        assert!(total <= OBJECT_BUDGET, "{total} objects over the budget");
+        assert!(total > OBJECT_BUDGET / 2, "only {total} objects delivered");
+        for (coord, _) in coarse {
+            assert!(delivered.contains(&coord), "coarse tile {coord:?} dropped");
+        }
+        assert!(!delivered.contains(&(0, 100, 100)));
+
+        let queries = store.queries.borrow();
+        let levels: BTreeSet<i32> = queries.iter().copied().collect();
+        assert_eq!(levels.len(), queries.len(), "a level was queried twice");
+        assert!(queries.len() <= 49, "{} range queries", queries.len());
+        assert!(queries.windows(2).all(|w| w[0] > w[1]), "not coarse first");
+
+        let kinds: Vec<FrameKind> = out
+            .iter()
+            .filter(|o| o.frame.tile_key == "-3:5:5" || o.frame.tile_key == "0:1:1")
+            .map(|o| o.frame.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [FrameKind::Sync, FrameKind::Sync, FrameKind::Snapshot]
+        );
+    }
+
+    #[test]
+    fn a_view_subscribes_the_live_band_and_drops_tiles_that_left_it() {
+        let store = MemoryStore::default();
+        seed(&store, (0, 1, 1), 1);
+        let mut board = BoardSync::new(|| 0, store);
+        let mut session = Session::default();
+        session.tiles.insert("0:1000:1000".into());
+        let first = board
+            .receive(&mut session, view_frame(0.0, 0.0, 1.0))
+            .unwrap();
+        assert_eq!(first.len(), 2, "step 1 and step 2 for the one live tile");
+
+        assert!(session.subscribed("-2:16:12"));
+        assert!(session.subscribed("40:0:0"));
+        assert!(!session.subscribed("-3:0:0"), "a snapshot tile is live");
+        assert!(!session.subscribed("0:1000:1000"));
+        assert!(Route::Tile("0:1:1".into()).reaches(false, &session));
+        let step1 = SyncMessage::SyncStep1(StateVector::default()).encode_v1();
+        let sync = |key: &str| Frame::new(key, FrameKind::Sync, step1.clone());
+        assert!(board.receive(&mut session, sync("-2:3:3")).is_ok());
+        assert!(board.receive(&mut session, sync("-3:3:3")).is_err());
+
+        let again = board
+            .receive(&mut session, view_frame(0.0, 0.0, 1.0))
+            .unwrap();
+        assert!(again.is_empty(), "a live tile was resent: {again:?}");
+
+        board
+            .receive(&mut session, view_frame(1e6, 1e6, 1.0))
+            .unwrap();
+        assert!(!session.subscribed("0:1:1"));
+        assert!(session.subscribed("0:3907:3907"));
     }
 
     fn board() -> BoardSync<MemoryStore> {

@@ -50,8 +50,11 @@ Every message is one binary CBOR map `{tileKey, kind, payload}`. `payload` is a 
 | `Unsubscribe` | `level:tx:ty` | empty | client to server |
 | `Sync` | `level:tx:ty` | one y-protocols sync message (`writeSyncStep1`, `writeSyncStep2` or `writeUpdate`) | both ways |
 | `Awareness` | `""` | `encodeAwarenessUpdate` output | both ways, board-wide |
+| `View` | `""` | CBOR map `{minX, minY, maxX, maxY, zoom}`: world bounds of the viewport | client to server |
+| `Snapshot` | `level:tx:ty` | the tile doc as one yrs update, read-only | server to client |
 | `Reject` | the frame's tileKey | UTF-8 reason | server to client |
 
+- A `View` replaces the socket's view. `viewTiles()` from `packages/geometry` splits it into levels; `crates/server/src/view.rs` mirrors that maths, and a cargo test checks both sides use the same constants. The live band (tiles of 64 px and up) is subscribed by range, so a tile that leaves the view is unsubscribed, explicit `Subscribe`s outside the band included. The server flushes dirty tiles, then runs one `object_index` range query per level, coarse first and nearest the centre first, until the view holds 4096 objects. A newly live tile with objects gets `Sync` step 1 and step 2; a finer tile gets a `Snapshot`, resent on every `View`. A live tile cut by the budget stays subscribed and syncs on the client's step 1. Bounds must be finite and at most 16384 px a side on screen.
 - A tile key is `tileKey()` from `packages/geometry`, level -40..40. `Sync` on an unsubscribed tile is rejected.
 - A tile doc holds one root, the `Y.Map` `objects`, keyed by `objectId`. Each value is the `encode()` CBOR of the object as a `Uint8Array`. The server validates every changed value with serde and rejects the whole update if one fails.
 - The server relays accepted step 2 and update messages as `writeUpdate` to the tile's other subscribers. An update with missing dependencies is not applied; the server answers with its own step 1 and the client replies with step 2.

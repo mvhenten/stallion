@@ -7,6 +7,8 @@ pub enum FrameKind {
     Sync,
     Awareness,
     Reject,
+    View,
+    Snapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
