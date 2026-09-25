@@ -16,7 +16,7 @@ export function Toolbar({ tool, onChange }: ToolbarProps) {
             aria-pressed={tool.size === size}
             aria-label={`${size} pencil`}
             class="tool"
-            onClick={() => onChange({ ...tool, size })}
+            onClick={() => onChange({ ...tool, size, pan: false })}
           >
             <span class="dot" style={{ width: DOT_PX[size], height: DOT_PX[size] }} />
           </button>
@@ -40,6 +40,24 @@ export function Toolbar({ tool, onChange }: ToolbarProps) {
           />
         ))}
       </fieldset>
+      <button
+        type="button"
+        class="tool"
+        aria-pressed={tool.pan}
+        aria-label="Pan tool"
+        title="Drag with one finger to move the board"
+        onClick={() => onChange({ ...tool, pan: !tool.pan })}
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
       <button
         type="button"
         class="tool pair"

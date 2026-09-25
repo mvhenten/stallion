@@ -12,6 +12,7 @@ import {
   zoomAt,
 } from "./camera";
 import { isVisible } from "./culling";
+import { createGestures, type Effect, type PointerKind } from "./gesture";
 import {
   type Draft,
   draftScreenPath,
@@ -23,13 +24,17 @@ import {
   strokeLocalPath,
 } from "./stroke";
 
-export type Tool = { size: PencilSize; primary: number; secondary: number };
+export type Tool = { size: PencilSize; primary: number; secondary: number; pan: boolean };
 
 type Entry = { tile: Tile; stroke: Stroke; path: Path2D };
 
-type Tracked = { point: Point; type: string };
-
-type Mode = "Idle" | "Draw" | "Gesture" | "Pan";
+const BLOCKED_TOUCH_EVENTS = [
+  "touchstart",
+  "touchmove",
+  "gesturestart",
+  "gesturechange",
+  "gestureend",
+] as const;
 
 const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
 
@@ -81,14 +86,11 @@ export function createSurface(
   const entries = new Map<string, Entry>();
   let ordered: Entry[] = [];
   let camera = loadCamera(boardId);
-  let mode: Mode = "Idle";
   let draft: Draft | undefined;
-  let draftPointer: number | undefined;
-  let penSeen = false;
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
-  const pointers = new Map<number, Tracked>();
+  const gestures = createGestures();
 
   const fail = (action: string) => (error: unknown) => {
     onError(`${action}: ${error instanceof Error ? error.message : String(error)}`);
@@ -169,6 +171,7 @@ export function createSurface(
   };
 
   const moveCamera = (next: Camera) => {
+    if (!isCamera(next)) return;
     camera = next;
     requestRender();
     settle();
@@ -183,12 +186,6 @@ export function createSurface(
     storeReady
       .then((store) => store.put(stored))
       .catch(fail("Could not save the stroke to local storage"));
-  };
-
-  const cancelDraft = () => {
-    draft = undefined;
-    draftPointer = undefined;
-    requestRender();
   };
 
   const localPoint = (event: PointerEvent | WheelEvent): Point => {
@@ -209,91 +206,69 @@ export function createSurface(
     draft.points.push([world.x, world.y, pressure]);
   };
 
-  const touches = (): Tracked[] =>
-    [...pointers.values()].filter((tracked) => tracked.type === "touch");
+  const pointerKind = (event: PointerEvent): PointerKind =>
+    event.pointerType === "pen" || event.pointerType === "touch" ? event.pointerType : "mouse";
+
+  const apply = (effects: readonly Effect[], event: PointerEvent) => {
+    for (const effect of effects) {
+      switch (effect.type) {
+        case "StartStroke": {
+          const tool = currentTool();
+          draft = startDraft(
+            effect.secondary ? tool.secondary : tool.primary,
+            tool.size,
+            camera.zoom,
+          );
+          addPoint(event);
+          break;
+        }
+        case "ExtendStroke": {
+          const samples = event.getCoalescedEvents?.() ?? [];
+          for (const sample of samples.length > 0 ? samples : [event]) addPoint(sample);
+          break;
+        }
+        case "CommitStroke":
+          commit();
+          break;
+        case "DiscardStroke":
+          draft = undefined;
+          break;
+        case "Pan":
+          moveCamera(pan(camera, effect.dx, effect.dy));
+          break;
+        case "Pinch":
+          moveCamera(pinch(camera, effect.from, effect.to));
+          break;
+      }
+    }
+    if (effects.length > 0) requestRender();
+  };
 
   const onPointerDown = (event: PointerEvent) => {
     event.preventDefault();
     canvas.setPointerCapture(event.pointerId);
-    pointers.set(event.pointerId, { point: localPoint(event), type: event.pointerType });
-    if (event.pointerType === "pen") penSeen = true;
-
-    if (event.pointerType === "touch") {
-      if (touches().length >= 2) {
-        if (
-          mode === "Draw" &&
-          draftPointer !== undefined &&
-          pointers.get(draftPointer)?.type === "touch"
-        ) {
-          cancelDraft();
-        }
-        if (mode !== "Draw") mode = "Gesture";
-        return;
-      }
-      if (penSeen) {
-        if (mode === "Idle") mode = "Gesture";
-        return;
-      }
-    }
-
-    if (mode !== "Idle") return;
-    if (event.pointerType === "mouse" && (event.button === 1 || spaceDown)) {
-      mode = "Pan";
-      return;
-    }
-    if (event.button !== 0 && event.button !== 2) return;
-    const tool = currentTool();
-    draft = startDraft(event.button === 2 ? tool.secondary : tool.primary, tool.size, camera.zoom);
-    draftPointer = event.pointerId;
-    mode = "Draw";
-    addPoint(event);
-    requestRender();
+    const effects = gestures.down(
+      {
+        pointerId: event.pointerId,
+        kind: pointerKind(event),
+        button: event.button,
+        point: localPoint(event),
+      },
+      { panTool: currentTool().pan, spaceDown },
+    );
+    apply(effects, event);
   };
 
   const onPointerMove = (event: PointerEvent) => {
-    const previous = pointers.get(event.pointerId);
-    if (!previous) return;
-    const point = localPoint(event);
-
-    if (mode === "Draw" && event.pointerId === draftPointer) {
-      const samples = event.getCoalescedEvents?.() ?? [];
-      for (const sample of samples.length > 0 ? samples : [event]) addPoint(sample);
-      requestRender();
-    }
-
-    if (mode === "Gesture") {
-      const others = [...pointers.entries()].filter(
-        ([id, tracked]) => id !== event.pointerId && tracked.type === "touch",
-      );
-      const partner = others[0]?.[1];
-      if (partner) {
-        moveCamera(pinch(camera, [previous.point, partner.point], [point, partner.point]));
-      } else {
-        moveCamera(pan(camera, point.x - previous.point.x, point.y - previous.point.y));
-      }
-    }
-
-    if (mode === "Pan") {
-      moveCamera(pan(camera, point.x - previous.point.x, point.y - previous.point.y));
-    }
-
-    pointers.set(event.pointerId, { point, type: previous.type });
+    apply(gestures.move(event.pointerId, localPoint(event)), event);
   };
 
-  const onPointerEnd = (event: PointerEvent) => {
-    if (!pointers.delete(event.pointerId)) return;
-    if (mode === "Draw" && event.pointerId === draftPointer) {
-      if (event.type === "pointercancel") {
-        cancelDraft();
-      } else {
-        commit();
-        draftPointer = undefined;
-        requestRender();
-      }
-      mode = touches().length > 0 ? "Gesture" : "Idle";
-      return;
-    }
-    if (pointers.size === 0) mode = "Idle";
+  const onPointerUp = (event: PointerEvent) => {
+    apply(gestures.up(event.pointerId), event);
+  };
+
+  const onPointerCancel = (event: PointerEvent) => {
+    apply(gestures.cancel(event.pointerId), event);
   };
 
   const onWheel = (event: WheelEvent) => {
@@ -318,11 +293,13 @@ export function createSurface(
 
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
-  canvas.addEventListener("pointerup", onPointerEnd);
-  canvas.addEventListener("pointercancel", onPointerEnd);
+  canvas.addEventListener("pointerup", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerCancel);
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", preventDefault);
-  canvas.addEventListener("touchstart", preventDefault, { passive: false });
+  for (const type of BLOCKED_TOUCH_EVENTS) {
+    canvas.addEventListener(type, preventDefault, { passive: false });
+  }
   window.addEventListener("keydown", onKey);
   window.addEventListener("keyup", onKey);
 
@@ -336,11 +313,11 @@ export function createSurface(
       observer.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerEnd);
-      canvas.removeEventListener("pointercancel", onPointerEnd);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", preventDefault);
-      canvas.removeEventListener("touchstart", preventDefault);
+      for (const type of BLOCKED_TOUCH_EVENTS) canvas.removeEventListener(type, preventDefault);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
       saveCamera(boardId, camera);
