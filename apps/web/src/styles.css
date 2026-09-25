@@ -99,6 +99,11 @@ body,
   border-color: var(--accent);
 }
 
+.tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .dot {
   display: block;
   border-radius: 50%;

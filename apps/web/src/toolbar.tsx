@@ -4,9 +4,18 @@ import { CONNECTION_LABEL, type Connection } from "./sync";
 
 const DOT_PX = { Small: 4, Medium: 9, Large: 16 } as const;
 
-type ToolbarProps = { tool: Tool; onChange: (tool: Tool) => void; connection: Connection };
+export type HistoryState = { canUndo: boolean; canRedo: boolean };
 
-export function Toolbar({ tool, onChange, connection }: ToolbarProps) {
+type ToolbarProps = {
+  tool: Tool;
+  onChange: (tool: Tool) => void;
+  connection: Connection;
+  history: HistoryState;
+  onUndo: () => void;
+  onRedo: () => void;
+};
+
+export function Toolbar({ tool, onChange, connection, history, onUndo, onRedo }: ToolbarProps) {
   return (
     <div class="toolbar" role="toolbar" aria-label="Drawing tools">
       <fieldset class="group" aria-label="Pencil size">
@@ -105,6 +114,46 @@ export function Toolbar({ tool, onChange, connection }: ToolbarProps) {
         <span class="chip back" style={{ background: PALETTE[tool.secondary] }} />
         <span class="chip front" style={{ background: PALETTE[tool.primary] }} />
       </button>
+      <fieldset class="group" aria-label="History">
+        <button
+          type="button"
+          class="tool"
+          aria-label="Undo"
+          title="Undo your last change (Ctrl+Z)"
+          disabled={!history.canUndo}
+          onClick={onUndo}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+              d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="tool"
+          aria-label="Redo"
+          title="Redo your last undone change (Ctrl+Shift+Z)"
+          disabled={!history.canRedo}
+          onClick={onRedo}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+              d="M15 14l5-5-5-5M20 9H10a6 6 0 000 12h3"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+      </fieldset>
       <span
         class="status"
         data-connection={connection}

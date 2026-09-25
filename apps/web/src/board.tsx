@@ -2,8 +2,18 @@ import { openBoard } from "@stallion/client-sync";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { errorMessage, reportLink } from "./report";
 import { createSurface, type Tool, type ToolMode } from "./surface";
-import { type Connection, openSource, syncUrlFor } from "./sync";
-import { Toolbar } from "./toolbar";
+import { type BoardSource, type Connection, openSource, syncUrlFor } from "./sync";
+import { type HistoryState, Toolbar } from "./toolbar";
+
+const EMPTY_HISTORY: HistoryState = { canUndo: false, canRedo: false };
+
+const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return undefined;
+  const key = event.key.toLowerCase();
+  if (key === "z") return event.shiftKey ? "Redo" : "Undo";
+  if (key === "y" && !event.shiftKey) return "Redo";
+  return undefined;
+};
 
 const SURFACE_CLASS: Record<ToolMode, string> = {
   Pencil: "surface",
@@ -22,6 +32,8 @@ export function Board({ boardId }: { boardId: string }) {
   });
   const [error, setError] = useState<string | undefined>(undefined);
   const [connection, setConnection] = useState<Connection>("LocalOnly");
+  const [history, setHistory] = useState<HistoryState>(EMPTY_HISTORY);
+  const sourceRef = useRef<BoardSource | undefined>(undefined);
   const toolRef = useRef(tool);
   toolRef.current = tool;
 
@@ -35,6 +47,18 @@ export function Board({ boardId }: { boardId: string }) {
       onConnection: setConnection,
       onError: setError,
     });
+    sourceRef.current = source;
+    const syncHistory = () =>
+      setHistory({ canUndo: source.history.canUndo, canRedo: source.history.canRedo });
+    const unobserve = source.history.observe(syncHistory);
+    const onKey = (event: KeyboardEvent) => {
+      const action = historyKey(event);
+      if (!action) return;
+      event.preventDefault();
+      if (action === "Undo") source.history.undo();
+      else source.history.redo();
+    };
+    window.addEventListener("keydown", onKey);
     let surface: ReturnType<typeof createSurface> | undefined;
     try {
       surface = createSurface(canvas, boardId, source, () => toolRef.current);
@@ -42,6 +66,10 @@ export function Board({ boardId }: { boardId: string }) {
       setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
     }
     return () => {
+      window.removeEventListener("keydown", onKey);
+      unobserve();
+      sourceRef.current = undefined;
+      setHistory(EMPTY_HISTORY);
       surface?.dispose();
       source
         .close()
@@ -58,7 +86,14 @@ export function Board({ boardId }: { boardId: string }) {
         class={SURFACE_CLASS[tool.mode]}
         aria-label={`Drawing board ${boardId}`}
       />
-      <Toolbar tool={tool} onChange={setTool} connection={connection} />
+      <Toolbar
+        tool={tool}
+        onChange={setTool}
+        connection={connection}
+        history={history}
+        onUndo={() => sourceRef.current?.history.undo()}
+        onRedo={() => sourceRef.current?.history.redo()}
+      />
       {error && (
         <div class="error" role="alert">
           <p>{error}. Strokes may not be saved; reload to try again.</p>

@@ -411,11 +411,13 @@ export function createSurface(
           eraser = undefined;
           drop();
           commit();
+          source.history.checkpoint();
           break;
         case "DiscardStroke":
           eraser = undefined;
           drag = undefined;
           draft = undefined;
+          source.history.checkpoint();
           break;
         case "Pan":
           moveCamera(pan(camera, effect.dx, effect.dy));
@@ -471,6 +473,7 @@ export function createSurface(
       if (selected === undefined || currentTool().mode !== "Select") return;
       event.preventDefault();
       source.erase(selected);
+      source.history.checkpoint();
       selected = undefined;
       requestRender();
       return;

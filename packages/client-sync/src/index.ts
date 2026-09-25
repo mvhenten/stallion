@@ -3,6 +3,7 @@ export {
   type BoardOptions,
   type BoardStatus,
   type Connect,
+  type History,
   type LiveObjects,
   openBoard,
   type SocketHandlers,

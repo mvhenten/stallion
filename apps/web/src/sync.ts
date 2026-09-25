@@ -1,6 +1,12 @@
-import { type BoardStore, openBoardStore, type StoredObject } from "@stallion/client-store";
-import type { BoardOptions, BoardStatus, LiveObjects, StallionBoard } from "@stallion/client-sync";
-import { type BBox, viewTiles } from "@stallion/geometry";
+import type { StoredObject } from "@stallion/client-store";
+import type {
+  BoardOptions,
+  BoardStatus,
+  History,
+  LiveObjects,
+  StallionBoard,
+} from "@stallion/client-sync";
+import type { BBox } from "@stallion/geometry";
 import { errorMessage } from "./report";
 
 export type Connection = "Connected" | "Reconnecting" | "Offline" | "LocalOnly";
@@ -21,6 +27,7 @@ export type BoardSource = {
   commit(stored: StoredObject): void;
   erase(objectId: string): void;
   readonly objects: LiveObjects;
+  readonly history: History;
   readonly awareness: Awareness | undefined;
   close(): Promise<void>;
 };
@@ -41,26 +48,6 @@ export const connectionFor = (status: BoardStatus, online: boolean): Connection 
   return status === "Closed" ? "Offline" : "Reconnecting";
 };
 
-const liveObjects = (): {
-  objects: LiveObjects;
-  map: Map<string, StoredObject>;
-  notify: (changed: ReadonlySet<string>) => void;
-} => {
-  const map = new Map<string, StoredObject>();
-  const listeners = new Set<(changed: ReadonlySet<string>) => void>();
-  const objects: LiveObjects = Object.assign(map, {
-    observe(listener: (changed: ReadonlySet<string>) => void): () => void {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  });
-  const notify = (changed: ReadonlySet<string>): void => {
-    if (changed.size === 0) return;
-    for (const listener of listeners) listener(changed);
-  };
-  return { objects, map, notify };
-};
-
 const debounced = (run: (viewport: BBox, zoom: number) => void) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return {
@@ -74,58 +61,23 @@ const debounced = (run: (viewport: BBox, zoom: number) => void) => {
   };
 };
 
-export function openLocalSource(boardId: string, onError: (message: string) => void): BoardSource {
-  const { objects, map, notify } = liveObjects();
-  const removed = new Set<string>();
-  const storeReady: Promise<BoardStore> = openBoardStore(boardId);
-  const fail = (action: string) => (error: unknown) => onError(`${action}: ${errorMessage(error)}`);
-  storeReady.catch(fail("Could not open the local board storage"));
-
-  const setView = debounced((viewport, zoom) => {
-    const tiles = viewTiles(viewport, zoom);
-    storeReady
-      .then((store) => store.query([...tiles.live, ...tiles.snapshot]))
-      .then((found) => {
-        const changed = new Set<string>();
-        for (const stored of found) {
-          const { objectId } = stored.object;
-          if (map.has(objectId) || removed.has(objectId)) continue;
-          map.set(objectId, stored);
-          changed.add(objectId);
-        }
-        notify(changed);
-      })
-      .catch(fail("Could not load the board from local storage"));
+export function openLocalSource(options: SourceOptions): BoardSource {
+  const board = options.openBoard("", options.boardId, {
+    localOnly: true,
+    cache: { cap: Number.POSITIVE_INFINITY },
+    onError: ({ reason }) => options.onError(reason),
   });
-
+  const setView = debounced((viewport, zoom) => board.setView(viewport, zoom));
   return {
     view: setView.call,
-    commit(stored) {
-      const previous = map.get(stored.object.objectId);
-      map.set(stored.object.objectId, stored);
-      notify(new Set([stored.object.objectId]));
-      storeReady
-        .then((store) => store.put(stored, previous?.tile))
-        .catch(fail("Could not save the stroke to local storage"));
-    },
-    erase(objectId) {
-      const stored = map.get(objectId);
-      if (!stored) return;
-      removed.add(objectId);
-      map.delete(objectId);
-      notify(new Set([objectId]));
-      storeReady
-        .then((store) => store.remove(objectId, stored.tile))
-        .catch(fail("Could not delete the stroke from local storage"));
-    },
-    objects,
+    commit: (stored) => board.put(stored),
+    erase: (objectId) => board.remove(objectId),
+    objects: board.objects,
+    history: board.history,
     awareness: undefined,
-    async close() {
+    close() {
       setView.cancel();
-      await storeReady.then(
-        (store) => store.close(),
-        () => undefined,
-      );
+      return board.close();
     },
   };
 }
@@ -144,6 +96,7 @@ export function openSyncSource(url: string, options: SourceOptions): BoardSource
     commit: (stored) => board.put(stored),
     erase: (objectId) => board.remove(objectId),
     objects: board.objects,
+    history: board.history,
     awareness: board.awareness,
     close() {
       setView.cancel();
@@ -155,7 +108,7 @@ export function openSyncSource(url: string, options: SourceOptions): BoardSource
 export function openSource(options: SourceOptions): BoardSource {
   if (!options.url) {
     options.onConnection("LocalOnly");
-    return openLocalSource(options.boardId, options.onError);
+    return openLocalSource(options);
   }
   try {
     return openSyncSource(options.url, options);
@@ -164,7 +117,7 @@ export function openSource(options: SourceOptions): BoardSource {
       `Could not connect to ${options.url} (${errorMessage(error)}), working local only`,
     );
     options.onConnection("LocalOnly");
-    return openLocalSource(options.boardId, options.onError);
+    return openLocalSource(options);
   }
 }
 
