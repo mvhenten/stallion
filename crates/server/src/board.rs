@@ -16,6 +16,8 @@ pub const OBJECTS: &str = "objects";
 pub struct Session {
     pub tiles: BTreeSet<String>,
     pub clients: BTreeSet<u64>,
+    #[serde(default)]
+    pub user: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,7 +173,13 @@ impl<S: TileStore> BoardSync<S> {
             }
             FrameKind::Sync => self.sync(session, frame),
             FrameKind::Awareness => {
-                let update = AwarenessUpdate::decode_v1(&frame.payload).map_err(read_error)?;
+                let mut update = AwarenessUpdate::decode_v1(&frame.payload).map_err(read_error)?;
+                let payload = if session.user.is_empty() {
+                    frame.payload
+                } else {
+                    stamp_user(&mut update, &session.user)?;
+                    update.encode_v1()
+                };
                 session
                     .clients
                     .extend(update.clients.keys().map(ClientID::get));
@@ -180,7 +188,7 @@ impl<S: TileStore> BoardSync<S> {
                     .map_err(|e| e.to_string())?;
                 Ok(vec![Outgoing {
                     route: Route::Board,
-                    frame: Frame::new(BOARD_KEY, FrameKind::Awareness, frame.payload),
+                    frame: Frame::new(BOARD_KEY, FrameKind::Awareness, payload),
                 }])
             }
             FrameKind::Reject => Err("clients cannot send Reject".into()),
@@ -249,6 +257,25 @@ pub fn compact(key: &str, doc: &Doc, updated_at: u64) -> Result<TileRecord, Stri
         updated_at,
         objects,
     })
+}
+
+fn stamp_user(update: &mut AwarenessUpdate, user: &str) -> Result<(), String> {
+    for entry in update.clients.values_mut() {
+        let mut state: serde_json::Value = serde_json::from_str(&entry.json)
+            .map_err(|e| format!("invalid awareness state: {e}"))?;
+        let Some(fields) = state.as_object_mut() else {
+            continue;
+        };
+        let identity = fields
+            .entry("user")
+            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+        if !identity.is_object() {
+            *identity = serde_json::Value::Object(Default::default());
+        }
+        identity["name"] = user.into();
+        entry.json = state.to_string().into();
+    }
+    Ok(())
 }
 
 fn reply(frame: Frame) -> Outgoing {
@@ -350,6 +377,29 @@ mod tests {
 
     fn board() -> BoardSync<MemoryStore> {
         BoardSync::new(|| 0, MemoryStore::default())
+    }
+
+    #[test]
+    fn awareness_names_the_verified_user() {
+        let mut board = board();
+        let mut peer = Awareness::with_clock(Doc::with_client_id(7), || 0);
+        peer.set_local_state_raw(r#"{"user":{"name":"spoof","color":"red"}}"#);
+        let payload = peer.update().unwrap().encode_v1();
+        let mut session = Session {
+            user: "user@example.com".into(),
+            ..Session::default()
+        };
+        let out = board
+            .receive(
+                &mut session,
+                Frame::new(BOARD_KEY, FrameKind::Awareness, payload),
+            )
+            .unwrap();
+        let update = AwarenessUpdate::decode_v1(&out[0].frame.payload).unwrap();
+        let state: serde_json::Value =
+            serde_json::from_str(&update.clients[&ClientID::new(7)].json).unwrap();
+        assert_eq!(state["user"]["name"], "user@example.com");
+        assert_eq!(state["user"]["color"], "red");
     }
 
     struct Client {

@@ -1,13 +1,16 @@
+pub mod auth;
 pub mod board;
 pub mod frame;
 pub mod object;
 pub mod store;
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Duration;
 
 use worker::*;
 
+use auth::{Access, AccessApp, Keys};
 use board::{BoardSync, Session};
 use frame::{Frame, FrameKind};
 use store::SqlTileStore;
@@ -15,6 +18,71 @@ use store::SqlTileStore;
 const BOARD_BINDING: &str = "BOARD";
 const FLUSH_DELAY: Duration = Duration::from_secs(5);
 const IDLE_MS: u64 = 60_000;
+
+const USER_HEADER: &str = "X-Stallion-User";
+
+thread_local! {
+    static ACCESS_KEYS: RefCell<Option<(u64, Rc<Keys>)>> = const { RefCell::new(None) };
+    static LOGGED_DISABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+enum Caller {
+    Anonymous,
+    User(String),
+    Denied(String),
+}
+
+async fn access_keys(app: &AccessApp) -> Result<Rc<Keys>> {
+    let now = Date::now().as_millis();
+    let cached = ACCESS_KEYS.with_borrow(|cache| {
+        cache
+            .as_ref()
+            .filter(|(fetched, _)| now.saturating_sub(*fetched) < auth::KEYS_TTL_MS)
+            .map(|(_, keys)| keys.clone())
+    });
+    if let Some(keys) = cached {
+        return Ok(keys);
+    }
+    let mut response = Fetch::Url(Url::parse(&app.certs_url())?).send().await?;
+    if response.status_code() != 200 {
+        return Err(Error::RustError(format!(
+            "{} returned {}",
+            app.certs_url(),
+            response.status_code()
+        )));
+    }
+    let keys = Rc::new(auth::parse_keys(&response.text().await?).map_err(Error::RustError)?);
+    ACCESS_KEYS.set(Some((now, keys.clone())));
+    Ok(keys)
+}
+
+async fn caller(req: &Request, env: &Env) -> Result<Caller> {
+    let access = Access::from_vars(
+        &env.var("ACCESS_TEAM_DOMAIN")?.to_string(),
+        &env.var("ACCESS_AUD")?.to_string(),
+    )
+    .map_err(Error::RustError)?;
+    let Access::Enabled(app) = access else {
+        if !LOGGED_DISABLED.replace(true) {
+            console_log!(
+                "Cloudflare Access is disabled: ACCESS_TEAM_DOMAIN and ACCESS_AUD are empty"
+            );
+        }
+        return Ok(Caller::Anonymous);
+    };
+    let assertion = req.headers().get(auth::ASSERTION_HEADER)?;
+    let cookie = req.headers().get("Cookie")?;
+    let Some(token) = auth::token(assertion.as_deref(), cookie.as_deref()) else {
+        return Ok(Caller::Denied("no Access token".into()));
+    };
+    let keys = access_keys(&app).await?;
+    Ok(
+        match auth::verify(token, &keys, &app, Date::now().as_millis() / 1000) {
+            Ok(identity) => Caller::User(identity.email),
+            Err(reason) => Caller::Denied(reason),
+        },
+    )
+}
 
 fn board_id(path: &str) -> Option<&str> {
     let id = path.strip_prefix("/api/boards/")?.strip_suffix("/ws")?;
@@ -28,13 +96,27 @@ fn board_id(path: &str) -> Option<&str> {
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+    let user = match caller(&req, &env).await? {
+        Caller::Denied(reason) => {
+            console_log!("Access rejected the request: {reason}");
+            return Response::error("unauthorized", 401);
+        }
+        Caller::Anonymous => String::new(),
+        Caller::User(email) => email,
+    };
     let url = req.url()?;
     let Some(id) = board_id(url.path()) else {
         return Response::error("expected /api/boards/{boardId}/ws", 404);
     };
+    let forward = req.clone_mut()?;
+    let headers = forward.headers();
+    headers.delete(USER_HEADER)?;
+    if !user.is_empty() {
+        headers.set(USER_HEADER, &user)?;
+    }
     env.durable_object(BOARD_BINDING)?
         .get_by_name(id)?
-        .fetch_with_request(req)
+        .fetch_with_request(forward)
         .await
 }
 
@@ -110,7 +192,11 @@ impl DurableObject for Board {
         }
         let pair = WebSocketPair::new()?;
         self.state.accept_web_socket(&pair.server);
-        pair.server.serialize_attachment(Session::default())?;
+        let session = Session {
+            user: req.headers().get(USER_HEADER)?.unwrap_or_default(),
+            ..Session::default()
+        };
+        pair.server.serialize_attachment(session)?;
         let opening = self.board.borrow().open().map_err(Error::RustError)?;
         for frame in opening {
             pair.server.send_with_bytes(frame.encode())?;
