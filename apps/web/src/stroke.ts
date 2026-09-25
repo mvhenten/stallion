@@ -1,12 +1,12 @@
 import type { StoredObject } from "@stallion/client-store";
 import {
   type BBox,
+  fromTileLocal,
   nativeLevel,
   type Point,
   place,
   TILE_SIZE,
   type Tile,
-  tileWorldSize,
   toTileLocal,
 } from "@stallion/geometry";
 import type { PencilSize, Stroke, Point as StrokePoint } from "@stallion/schema";
@@ -101,14 +101,27 @@ export const finishDraft = (draft: Draft): StoredObject | undefined => {
   return { tile, object: stroke };
 };
 
-export const localScale = (tile: Tile): number => tileWorldSize(tile.level) / TILE_SIZE;
+export type StrokeFrame = { origin: Point; scale: number; points: StrokePoint[] };
 
-export const strokeLocalPath = (tile: Tile, stroke: Stroke): Path2D =>
-  outlinePath(
-    stroke.points,
-    strokeWorldWidth(stroke.size, stroke.nativeZoom) / localScale(tile),
-    true,
+// Path2D keeps float32, so points live relative to the stroke bbox, never the tile.
+export const strokeFrame = (tile: Tile, stroke: Stroke): StrokeFrame => {
+  const { bbox } = stroke;
+  const origin = { x: bbox.minX, y: bbox.minY };
+  const extent = Math.max(
+    bbox.maxX - bbox.minX,
+    bbox.maxY - bbox.minY,
+    strokeWorldWidth(stroke.size, stroke.nativeZoom),
   );
+  const scale = extent / TILE_SIZE;
+  const points = stroke.points.map(([x, y, pressure]): StrokePoint => {
+    const world = fromTileLocal(tile, { x, y });
+    return [(world.x - origin.x) / scale, (world.y - origin.y) / scale, pressure];
+  });
+  return { origin, scale, points };
+};
+
+export const strokeFramePath = (stroke: Stroke, frame: StrokeFrame): Path2D =>
+  outlinePath(frame.points, strokeWorldWidth(stroke.size, stroke.nativeZoom) / frame.scale, true);
 
 export const draftScreenPath = (
   draft: Draft,
