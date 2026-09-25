@@ -5,5 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@stallion/geometry": "*",
+    "@stallion/schema": "*",
+    "idb": "^8.0.3"
   }
 }
