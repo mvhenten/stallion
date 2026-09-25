@@ -61,6 +61,8 @@ const remoteCursor = (clientId: number, state: unknown): RemoteCursor | undefine
   return { x, y, name, colour: PALETTE[clientId % PALETTE.length] ?? PALETTE[0] };
 };
 
+export const PAPER = "#fbfaf7";
+
 const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
 
 const isCamera = (value: unknown): value is Camera => {
@@ -128,7 +130,8 @@ export function createSurface(
     const dpr = window.devicePixelRatio || 1;
     const { width, height } = size();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     const view = viewBounds(camera, width, height);
     for (const entry of ordered) {
       if (!isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
