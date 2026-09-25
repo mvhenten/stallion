@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
-import { place, tileKey } from "@stallion/geometry";
-import type { Stroke } from "@stallion/schema";
+import { type BBox, place, tileKey } from "@stallion/geometry";
+import { decodeMove, type Stroke } from "@stallion/schema";
 import { afterEach, expect, test } from "vitest";
 import { openBoard, type StallionBoard } from "./index";
 import { TestServer } from "./test-server";
@@ -22,8 +22,7 @@ const open = (server: TestServer): StallionBoard => {
   return board;
 };
 
-const stroke = (objectId: string) => {
-  const bbox = { minX: 10, minY: 10, maxX: 200, maxY: 200 };
+const stroke = (objectId: string, bbox: BBox = { minX: 10, minY: 10, maxX: 200, maxY: 200 }) => {
   const placed = place(bbox);
   if (!placed.ok) throw new Error("stroke does not fit a tile");
   const object: Stroke = {
@@ -106,4 +105,31 @@ test("a view change unsubscribes tiles that leave the view", async () => {
   await until(() => server.objectIds(TILE).length === 2, "the server to take the second stroke");
   await settle();
   expect(alice.objects.size).toBe(0);
+});
+
+test("a put that changes the tile sends one move frame and keeps the object once", async () => {
+  const server = new TestServer();
+  const alice = open(server);
+  const bob = open(server);
+  await until(() => alice.status === "Open" && bob.status === "Open", "both sockets");
+  await settle();
+  alice.put(stroke("mover"));
+  await until(() => bob.objects.has("mover"), "bob to see the stroke");
+
+  const moved = stroke("mover", { minX: 300, minY: 10, maxX: 490, maxY: 200 });
+  const target = tileKey(moved.tile);
+  expect(target).not.toBe(TILE);
+  alice.put(moved);
+  await until(() => server.objectIds(target).length === 1, "the server to take the move");
+  await settle();
+
+  const [aliceSession] = server.sessions;
+  const moves = (aliceSession?.received ?? []).filter((frame) => frame.kind === "Move");
+  expect(moves).toHaveLength(1);
+  const decoded = moves[0] && decodeMove(moves[0].payload);
+  expect(decoded?.ok && [decoded.value.fromTile, decoded.value.toTile]).toEqual([TILE, target]);
+  expect(server.objectIds(TILE)).toEqual([]);
+  const landed = bob.objects.get("mover");
+  expect(landed && tileKey(landed.tile)).toBe(target);
+  expect(bob.objects.size).toBe(1);
 });

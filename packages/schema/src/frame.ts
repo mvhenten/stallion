@@ -9,6 +9,7 @@ export const frameKind = z.enum([
   "Reject",
   "View",
   "Snapshot",
+  "Move",
 ]);
 
 export const frame = z.strictObject({
@@ -36,6 +37,35 @@ export const encodeFrame = (value: Frame): Uint8Array =>
 
 export const decodeFrame = (bytes: Uint8Array): FrameResult => {
   const parsed = frame.safeParse(cbor.decode(bytes));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.message };
+  }
+  return { ok: true, value: parsed.data };
+};
+
+export const move = z.strictObject({
+  objectId: z.string(),
+  fromTile: z.string(),
+  toTile: z.string(),
+  fromUpdate: z.instanceof(Uint8Array),
+  toUpdate: z.instanceof(Uint8Array),
+});
+
+export type Move = z.infer<typeof move>;
+
+export type MoveResult = { ok: true; value: Move } | { ok: false; error: string };
+
+export const encodeMove = (value: Move): Uint8Array =>
+  cbor.encode({
+    objectId: value.objectId,
+    fromTile: value.fromTile,
+    toTile: value.toTile,
+    fromUpdate: value.fromUpdate,
+    toUpdate: value.toUpdate,
+  });
+
+export const decodeMove = (bytes: Uint8Array): MoveResult => {
+  const parsed = move.safeParse(cbor.decode(bytes));
   if (!parsed.success) {
     return { ok: false, error: parsed.error.message };
   }

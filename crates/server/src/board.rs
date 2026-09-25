@@ -7,7 +7,7 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{Any, ClientID, Doc, Map, Out, ReadTxn, StateVector, Transact, Update};
 
-use crate::frame::{BOARD_KEY, Frame, FrameKind, parse_tile_key};
+use crate::frame::{BOARD_KEY, Frame, FrameKind, Move, parse_tile_key};
 use crate::store::{TileCoord, TileRecord, TileStore};
 use crate::view::{OBJECT_BUDGET, Viewport};
 
@@ -56,8 +56,8 @@ pub struct Outgoing {
     pub frame: Frame,
 }
 
-enum Applied {
-    Integrated { changed: bool },
+enum Checked {
+    Ready { introduced: Vec<String> },
     MissingDependencies,
 }
 
@@ -95,14 +95,17 @@ impl<S: TileStore> BoardSync<S> {
 
     pub fn flush(&mut self) -> Result<usize, String> {
         let now = self.clock.now();
-        let keys: Vec<String> = self.dirty.iter().cloned().collect();
-        for key in &keys {
-            if let Some(tile) = self.tiles.get(key) {
-                self.store.save(&compact(key, &tile.doc, now)?)?;
-            }
-            self.dirty.remove(key);
+        let records = self
+            .dirty
+            .iter()
+            .filter_map(|key| self.tiles.get(key).map(|tile| compact(key, &tile.doc, now)))
+            .collect::<Result<Vec<_>, _>>()?;
+        if !records.is_empty() {
+            self.store.save_all(&records)?;
         }
-        Ok(keys.len())
+        let flushed = self.dirty.len();
+        self.dirty.clear();
+        Ok(flushed)
     }
 
     pub fn evict_idle(&mut self, idle_ms: u64) {
@@ -215,6 +218,7 @@ impl<S: TileStore> BoardSync<S> {
                 }])
             }
             FrameKind::View => self.view(session, Viewport::decode(&frame.payload)?),
+            FrameKind::Move => self.move_object(session, Move::decode(&frame.payload)?),
             FrameKind::Reject | FrameKind::Snapshot => {
                 Err(format!("clients cannot send {:?}", frame.kind))
             }
@@ -278,28 +282,136 @@ impl<S: TileStore> BoardSync<S> {
                 ))])
             }
             SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                match apply(&doc, &update)? {
-                    Applied::Integrated { changed } => {
-                        if changed {
-                            self.dirty.insert(key.clone());
-                        }
-                        let payload = SyncMessage::Update(update).encode_v1();
-                        Ok(vec![Outgoing {
-                            route: Route::Tile(key.clone()),
-                            frame: Frame::new(key, FrameKind::Sync, payload),
-                        }])
-                    }
-                    Applied::MissingDependencies => {
-                        let step1 = SyncMessage::SyncStep1(doc.transact().state_vector());
-                        Ok(vec![reply(Frame::new(
-                            key,
-                            FrameKind::Sync,
-                            step1.encode_v1(),
-                        ))])
+                let Checked::Ready { introduced } = check(&doc, &update)? else {
+                    return Ok(vec![step1(&key, &doc)]);
+                };
+                self.commit(&key, &doc, &update)?;
+                let mut outgoing = vec![relay(&key, update)];
+                for object_id in introduced {
+                    if self.holder(&object_id, &[&key])?.is_some() {
+                        outgoing.extend(self.evict(&key, &doc, &object_id));
                     }
                 }
+                Ok(outgoing)
             }
         }
+    }
+
+    /// Applies both halves of a cross-tile move or neither. A move wins over a concurrent edit
+    /// that kept the object in the source tile, and the first of two concurrent moves wins.
+    fn move_object(&mut self, session: &Session, moved: Move) -> Result<Vec<Outgoing>, String> {
+        if moved.from_tile == moved.to_tile {
+            return Err(format!(
+                "a move needs two tiles, got {:?} twice",
+                moved.to_tile
+            ));
+        }
+        for key in [&moved.from_tile, &moved.to_tile] {
+            if !session.subscribed(key) {
+                return Err(format!("tile {key:?} is not subscribed"));
+            }
+        }
+        let from = self.tile(&moved.from_tile)?;
+        let to = self.tile(&moved.to_tile)?;
+        let from_checked = check(&from, &moved.from_update)?;
+        let to_checked = check(&to, &moved.to_update)?;
+        let (Checked::Ready { .. }, Checked::Ready { .. }) = (from_checked, to_checked) else {
+            return Ok(vec![
+                step1(&moved.from_tile, &from),
+                step1(&moved.to_tile, &to),
+            ]);
+        };
+        let was_in_source = holds(&from, &moved.object_id);
+        self.commit(&moved.from_tile, &from, &moved.from_update)?;
+        self.commit(&moved.to_tile, &to, &moved.to_update)?;
+        let mut outgoing = vec![
+            relay(&moved.from_tile, moved.from_update),
+            relay(&moved.to_tile, moved.to_update),
+        ];
+        if !holds(&to, &moved.object_id) {
+            return Ok(outgoing);
+        }
+        outgoing.extend(self.evict(&moved.from_tile, &from, &moved.object_id));
+        let elsewhere = self.holder(&moved.object_id, &[&moved.from_tile, &moved.to_tile])?;
+        if !was_in_source && elsewhere.is_some() {
+            outgoing.extend(self.evict(&moved.to_tile, &to, &moved.object_id));
+        }
+        Ok(outgoing)
+    }
+
+    fn commit(&mut self, key: &str, doc: &Doc, update: &[u8]) -> Result<(), String> {
+        let update = decode_update(update)?;
+        if update.is_empty() {
+            return Ok(());
+        }
+        doc.transact_mut()
+            .apply_update(update)
+            .map_err(|e| e.to_string())?;
+        self.dirty.insert(key.to_owned());
+        Ok(())
+    }
+
+    fn evict(&mut self, key: &str, doc: &Doc, object_id: &str) -> Vec<Outgoing> {
+        if !holds(doc, object_id) {
+            return Vec::new();
+        }
+        let objects = doc.get_or_insert_map(OBJECTS);
+        let update = {
+            let mut txn = doc.transact_mut();
+            objects.remove(&mut txn, object_id);
+            txn.encode_update_v1()
+        };
+        self.dirty.insert(key.to_owned());
+        let frame = Frame::new(
+            key,
+            FrameKind::Sync,
+            SyncMessage::Update(update).encode_v1(),
+        );
+        vec![
+            reply(frame.clone()),
+            Outgoing {
+                route: Route::Tile(key.to_owned()),
+                frame,
+            },
+        ]
+    }
+
+    fn holder(&self, object_id: &str, except: &[&str]) -> Result<Option<String>, String> {
+        let loaded = self
+            .tiles
+            .iter()
+            .find(|(key, tile)| !except.contains(&key.as_str()) && holds(&tile.doc, object_id));
+        if let Some((key, _)) = loaded {
+            return Ok(Some(key.clone()));
+        }
+        Ok(self
+            .store
+            .locate(object_id)?
+            .into_iter()
+            .map(tile_key)
+            .find(|key| !except.contains(&key.as_str()) && !self.tiles.contains_key(key)))
+    }
+}
+
+fn holds(doc: &Doc, object_id: &str) -> bool {
+    let txn = doc.transact();
+    txn.get_map(OBJECTS)
+        .is_some_and(|objects| objects.contains_key(&txn, object_id))
+}
+
+fn step1(key: &str, doc: &Doc) -> Outgoing {
+    let step1 = SyncMessage::SyncStep1(doc.transact().state_vector());
+    reply(Frame::new(key, FrameKind::Sync, step1.encode_v1()))
+}
+
+fn relay(key: &str, update: Vec<u8>) -> Outgoing {
+    Outgoing {
+        route: Route::Tile(key.to_owned()),
+        frame: Frame::new(
+            key,
+            FrameKind::Sync,
+            SyncMessage::Update(update).encode_v1(),
+        ),
     }
 }
 
@@ -360,7 +472,7 @@ fn decode_update(bytes: &[u8]) -> Result<Update, String> {
     Update::decode_v1(bytes).map_err(read_error)
 }
 
-fn apply(doc: &Doc, update: &[u8]) -> Result<Applied, String> {
+fn check(doc: &Doc, update: &[u8]) -> Result<Checked, String> {
     let trial = Doc::new();
     let current = doc
         .transact()
@@ -374,32 +486,30 @@ fn apply(doc: &Doc, update: &[u8]) -> Result<Applied, String> {
     }
     let txn = trial.transact();
     if txn.store().pending_update().is_some() || txn.store().pending_ds().is_some() {
-        return Ok(Applied::MissingDependencies);
+        return Ok(Checked::MissingDependencies);
     }
     if let Some((name, _)) = txn.root_refs().find(|(name, _)| *name != OBJECTS) {
         return Err(format!(
             "unknown root type {name:?}; only {OBJECTS:?} is allowed"
         ));
     }
+    let mut introduced = Vec::new();
     if let Some(objects) = txn.get_map(OBJECTS) {
         let before_txn = doc.transact();
         let before = before_txn.get_map(OBJECTS);
         for (object_id, value) in objects.iter(&txn) {
-            let unchanged = before
+            let old = before
                 .as_ref()
-                .and_then(|map| map.get(&before_txn, object_id))
-                .is_some_and(|old| old == value);
-            if !unchanged {
+                .and_then(|map| map.get(&before_txn, object_id));
+            if old.is_none() {
+                introduced.push(object_id.to_owned());
+            }
+            if old.is_none_or(|old| old != value) {
                 validate_entry(object_id, &value)?;
             }
         }
     }
-    let update = decode_update(update)?;
-    let changed = !update.is_empty();
-    doc.transact_mut()
-        .apply_update(update)
-        .map_err(|e| e.to_string())?;
-    Ok(Applied::Integrated { changed })
+    Ok(Checked::Ready { introduced })
 }
 
 fn validate_entry(object_id: &str, value: &Out) -> Result<(), String> {
@@ -433,6 +543,7 @@ mod tests {
     struct MemoryStore {
         rows: Rc<RefCell<HashMap<TileCoord, TileRecord>>>,
         saves: Rc<RefCell<usize>>,
+        batches: Rc<RefCell<Vec<usize>>>,
         queries: Rc<RefCell<Vec<i32>>>,
     }
 
@@ -441,10 +552,23 @@ mod tests {
             Ok(self.rows.borrow().get(&coord).map(|r| r.doc_state.clone()))
         }
 
-        fn save(&self, record: &TileRecord) -> Result<(), String> {
-            *self.saves.borrow_mut() += 1;
-            self.rows.borrow_mut().insert(record.coord, record.clone());
+        fn save_all(&self, records: &[TileRecord]) -> Result<(), String> {
+            *self.saves.borrow_mut() += records.len();
+            self.batches.borrow_mut().push(records.len());
+            for record in records {
+                self.rows.borrow_mut().insert(record.coord, record.clone());
+            }
             Ok(())
+        }
+
+        fn locate(&self, object_id: &str) -> Result<Vec<TileCoord>, String> {
+            Ok(self
+                .rows
+                .borrow()
+                .values()
+                .filter(|r| r.objects.iter().any(|(id, _)| id == object_id))
+                .map(|r| r.coord)
+                .collect())
         }
 
         fn range(
@@ -829,5 +953,152 @@ mod tests {
         connect(&mut restarted, &mut fresh, 0);
         assert!(stored(&fresh[0].doc, "stroke-0001").is_some());
         assert!(!restarted.has_dirty());
+    }
+
+    const SOURCE: &str = "0:0:0";
+    const TARGET: &str = "1:-1:0";
+    const STROKE: &str = "stroke-0001";
+
+    struct Peer {
+        session: Session,
+        docs: HashMap<String, Doc>,
+    }
+
+    impl Peer {
+        fn new() -> Self {
+            let mut session = Session::default();
+            session.tiles.extend([SOURCE.to_owned(), TARGET.to_owned()]);
+            Peer {
+                session,
+                docs: [SOURCE, TARGET]
+                    .into_iter()
+                    .map(|key| (key.to_owned(), Doc::new()))
+                    .collect(),
+            }
+        }
+
+        fn edit(
+            &self,
+            key: &str,
+            change: impl FnOnce(&mut yrs::TransactionMut, &yrs::MapRef),
+        ) -> Vec<u8> {
+            let doc = &self.docs[key];
+            let objects = doc.get_or_insert_map(OBJECTS);
+            let mut txn = doc.transact_mut();
+            change(&mut txn, &objects);
+            txn.encode_update_v1()
+        }
+
+        fn put(&self, key: &str) -> Vec<u8> {
+            self.edit(key, |txn, objects| {
+                objects.insert(txn, STROKE, Any::Buffer(fixture().into()));
+            })
+        }
+
+        fn move_frame(&self) -> Frame {
+            let moved = Move {
+                object_id: STROKE.into(),
+                from_tile: SOURCE.into(),
+                to_tile: TARGET.into(),
+                from_update: self.edit(SOURCE, |txn, objects| {
+                    objects.remove(txn, STROKE);
+                }),
+                to_update: self.put(TARGET),
+            };
+            Frame::new(BOARD_KEY, FrameKind::Move, moved.encode())
+        }
+
+        fn holds(&self, key: &str) -> bool {
+            holds(&self.docs[key], STROKE)
+        }
+    }
+
+    fn update_frame(key: &str, update: Vec<u8>) -> Frame {
+        Frame::new(
+            key,
+            FrameKind::Sync,
+            SyncMessage::Update(update).encode_v1(),
+        )
+    }
+
+    fn exchange(
+        board: &mut BoardSync<MemoryStore>,
+        peers: &mut [Peer],
+        from: usize,
+        frame: Frame,
+    ) -> Result<(), String> {
+        let wire = Frame::decode(&frame.encode()).unwrap();
+        for out in board.receive(&mut peers[from].session, wire)? {
+            for (i, peer) in peers.iter_mut().enumerate() {
+                if !out.route.reaches(i == from, &peer.session) {
+                    continue;
+                }
+                let SyncMessage::Update(update) =
+                    SyncMessage::decode_v1(&out.frame.payload).unwrap()
+                else {
+                    panic!("unexpected {:?}", out.frame);
+                };
+                peer.docs[&out.frame.tile_key]
+                    .transact_mut()
+                    .apply_update(Update::decode_v1(&update).unwrap())
+                    .unwrap();
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_cross_tile_move_and_a_concurrent_edit_keep_the_object_exactly_once() {
+        for edit_first in [false, true] {
+            let store = MemoryStore::default();
+            let mut board = BoardSync::new(|| 0, store.clone());
+            let mut peers = [Peer::new(), Peer::new()];
+            let created = peers[0].put(SOURCE);
+            exchange(&mut board, &mut peers, 0, update_frame(SOURCE, created)).unwrap();
+            assert!(peers[1].holds(SOURCE));
+            board.flush().unwrap();
+
+            let moved = peers[0].move_frame();
+            let edited = update_frame(SOURCE, peers[1].put(SOURCE));
+            if edit_first {
+                exchange(&mut board, &mut peers, 1, edited).unwrap();
+                exchange(&mut board, &mut peers, 0, moved).unwrap();
+            } else {
+                exchange(&mut board, &mut peers, 0, moved).unwrap();
+                exchange(&mut board, &mut peers, 1, edited).unwrap();
+            }
+
+            for (i, peer) in peers.iter().enumerate() {
+                assert!(
+                    !peer.holds(SOURCE),
+                    "peer {i} kept a duplicate (edit first: {edit_first})"
+                );
+                assert!(
+                    peer.holds(TARGET),
+                    "peer {i} lost the object (edit first: {edit_first})"
+                );
+            }
+            store.batches.borrow_mut().clear();
+            assert_eq!(board.flush(), Ok(2));
+            assert_eq!(*store.batches.borrow(), [2], "both tiles in one write");
+            assert_eq!(store.locate(STROKE).unwrap(), [(1, -1, 0)]);
+        }
+    }
+
+    #[test]
+    fn a_move_with_an_invalid_half_changes_neither_tile() {
+        let mut board = board();
+        let mut peers = [Peer::new()];
+        let created = peers[0].put(SOURCE);
+        exchange(&mut board, &mut peers, 0, update_frame(SOURCE, created)).unwrap();
+        let mut moved = Move::decode(&peers[0].move_frame().payload).unwrap();
+        moved.to_update = peers[0].edit(TARGET, |txn, objects| {
+            objects.insert(txn, "stroke-0002", Any::Buffer(fixture().into()));
+        });
+        let frame = Frame::new(BOARD_KEY, FrameKind::Move, moved.encode());
+        let error = exchange(&mut board, &mut peers, 0, frame).unwrap_err();
+        assert!(error.contains("objectId"), "{error}");
+        assert!(holds(&board.tile(SOURCE).unwrap(), STROKE));
+        assert!(!holds(&board.tile(TARGET).unwrap(), STROKE));
     }
 }

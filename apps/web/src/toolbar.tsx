@@ -62,6 +62,24 @@ export function Toolbar({ tool, onChange, connection }: ToolbarProps) {
       <button
         type="button"
         class="tool"
+        aria-pressed={tool.mode === "Select"}
+        aria-label="Select tool"
+        title="Tap a stroke to select it, drag to move it, Delete to remove it"
+        onClick={() => onChange({ ...tool, mode: tool.mode === "Select" ? "Pencil" : "Select" })}
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            d="M5 3l14 8-6 2-3 6-5-16z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="tool"
         aria-pressed={tool.mode === "Eraser"}
         aria-label="Eraser"
         title="Tap or drag across a stroke to delete it"

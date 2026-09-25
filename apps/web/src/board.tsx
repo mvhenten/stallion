@@ -9,6 +9,7 @@ const SURFACE_CLASS: Record<ToolMode, string> = {
   Pencil: "surface",
   Pan: "surface panning",
   Eraser: "surface erasing",
+  Select: "surface selecting",
 };
 
 export function Board({ boardId }: { boardId: string }) {

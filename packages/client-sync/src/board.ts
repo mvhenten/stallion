@@ -18,6 +18,7 @@ import {
   decodeFrame,
   encode,
   encodeFrame,
+  encodeMove,
   type FrameKind,
 } from "@stallion/schema";
 import { Encoder } from "cbor-x";
@@ -67,6 +68,7 @@ type View = { viewport: BBox; zoom: number; tiles: ViewTiles };
 
 const REMOTE = Symbol("remote");
 const CACHED = Symbol("cached");
+const MOVED = Symbol("moved");
 const OBJECTS = "objects";
 
 const viewCodec = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSize: true });
@@ -207,7 +209,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     entry.doc.on("update", (update: Uint8Array, origin: unknown) => {
       if (origin === CACHED) return;
       schedulePersist(entry.key);
-      if (origin !== REMOTE) sendLocalUpdate(entry, update);
+      if (origin !== REMOTE && origin !== MOVED) sendLocalUpdate(entry, update);
     });
   };
 
@@ -375,13 +377,59 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     loadCached();
   };
 
+  const edit = (
+    entry: TileEntry,
+    change: (objects: Y.Map<Uint8Array>) => void,
+  ): Uint8Array<ArrayBuffer> => {
+    let captured: Uint8Array<ArrayBuffer> = new Uint8Array();
+    const capture = (update: Uint8Array, origin: unknown): void => {
+      if (origin === MOVED) captured = new Uint8Array(update);
+    };
+    entry.doc.on("update", capture);
+    entry.doc.transact(() => change(entry.doc.getMap<Uint8Array>(OBJECTS)), MOVED);
+    entry.doc.off("update", capture);
+    return captured;
+  };
+
+  const ensureSubscribed = (entry: TileEntry): void => {
+    if (subscribed(entry)) return;
+    entry.explicit = true;
+    send(entry.key, "Subscribe");
+  };
+
+  const move = (
+    source: TileEntry,
+    target: TileEntry,
+    objectId: string,
+    bytes: Uint8Array,
+  ): void => {
+    const fromUpdate = edit(source, (objects) => objects.delete(objectId));
+    const toUpdate = edit(target, (objects) => objects.set(objectId, bytes));
+    if (status !== "Open") {
+      withCache(async (cache) => {
+        await cache.enqueue(source.tile, fromUpdate);
+        await cache.enqueue(target.tile, toUpdate);
+      }, "Could not queue an offline move");
+      return;
+    }
+    ensureSubscribed(source);
+    ensureSubscribed(target);
+    send(
+      BOARD_KEY,
+      "Move",
+      encodeMove({ objectId, fromTile: source.key, toTile: target.key, fromUpdate, toUpdate }),
+    );
+  };
+
   const put = (stored: StoredObject): void => {
     const { objectId } = stored.object;
     const bytes = new Uint8Array(encode(stored.object));
     const previous = objectMap.get(objectId);
     const target = entryFor(stored.tile);
-    if (previous && tileKey(previous.tile) !== target.key) {
-      entries.get(tileKey(previous.tile))?.doc.getMap(OBJECTS).delete(objectId);
+    const source = previous && entries.get(tileKey(previous.tile));
+    if (source && source !== target) {
+      move(source, target, objectId, bytes);
+      return;
     }
     target.doc.getMap<Uint8Array>(OBJECTS).set(objectId, bytes);
   };

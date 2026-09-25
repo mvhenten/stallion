@@ -9,6 +9,7 @@ pub enum FrameKind {
     Reject,
     View,
     Snapshot,
+    Move,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,30 @@ pub struct Frame {
 }
 
 pub const BOARD_KEY: &str = "";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Move {
+    pub object_id: String,
+    pub from_tile: String,
+    pub to_tile: String,
+    #[serde(with = "serde_bytes")]
+    pub from_update: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub to_update: Vec<u8>,
+}
+
+impl Move {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        ciborium::into_writer(self, &mut bytes).expect("writing to a Vec cannot fail");
+        bytes
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Move, String> {
+        ciborium::from_reader(bytes).map_err(|e| format!("invalid move payload: {e}"))
+    }
+}
 
 impl Frame {
     pub fn new(tile_key: impl Into<String>, kind: FrameKind, payload: Vec<u8>) -> Self {
@@ -80,6 +105,24 @@ mod tests {
         ]
         .concat();
         assert_eq!(Frame::decode(&tagged), Ok(frame));
+    }
+
+    #[test]
+    fn matches_the_golden_move_fixture_from_the_client_codec() {
+        let hex = include_str!("../../../packages/schema/fixtures/move.cbor.hex").trim();
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let expected = Move {
+            object_id: "stroke-0001".into(),
+            from_tile: "0:0:0".into(),
+            to_tile: "1:-1:2".into(),
+            from_update: vec![1],
+            to_update: vec![2, 3],
+        };
+        assert_eq!(Move::decode(&bytes), Ok(expected.clone()));
+        assert_eq!(expected.encode(), bytes);
     }
 
     #[test]

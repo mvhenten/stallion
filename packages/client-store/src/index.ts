@@ -1,4 +1,4 @@
-import type { LevelRange, Tile } from "@stallion/geometry";
+import { type LevelRange, type Tile, tileKey } from "@stallion/geometry";
 import { decode, encode, type StallionObject } from "@stallion/schema";
 import { type DBSchema, type IDBPDatabase, type IDBPObjectStore, openDB } from "idb";
 
@@ -64,7 +64,7 @@ const openStallionDB = (name = DB_NAME): Promise<IDBPDatabase<StallionDB>> =>
   });
 
 export type BoardStore = {
-  put(stored: StoredObject): Promise<void>;
+  put(stored: StoredObject, from?: Tile): Promise<void>;
   query(ranges: readonly LevelRange[]): Promise<StoredObject[]>;
   remove(objectId: string, tile: Tile): Promise<void>;
   close(): void;
@@ -73,15 +73,22 @@ export type BoardStore = {
 export async function openBoardStore(boardId: string): Promise<BoardStore> {
   const db = await openStallionDB();
 
-  const put = async ({ tile, object }: StoredObject): Promise<void> => {
-    await db.put("objects", {
-      boardId,
-      level: tile.level,
-      tx: tile.tx,
-      ty: tile.ty,
-      objectId: object.objectId,
-      bytes: encode(object),
-    });
+  const put = async ({ tile, object }: StoredObject, from?: Tile): Promise<void> => {
+    const tx = db.transaction("objects", "readwrite");
+    const writes: Promise<unknown>[] = [
+      tx.store.put({
+        boardId,
+        level: tile.level,
+        tx: tile.tx,
+        ty: tile.ty,
+        objectId: object.objectId,
+        bytes: encode(object),
+      }),
+    ];
+    if (from && tileKey(from) !== tileKey(tile)) {
+      writes.push(tx.store.delete([boardId, from.level, from.tx, from.ty, object.objectId]));
+    }
+    await Promise.all([...writes, tx.done]);
   };
 
   const queryLevel = async (store: ObjectStore, range: LevelRange): Promise<StoredObject[]> => {

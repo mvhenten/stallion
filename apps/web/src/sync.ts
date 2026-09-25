@@ -101,10 +101,11 @@ export function openLocalSource(boardId: string, onError: (message: string) => v
   return {
     view: setView.call,
     commit(stored) {
+      const previous = map.get(stored.object.objectId);
       map.set(stored.object.objectId, stored);
       notify(new Set([stored.object.objectId]));
       storeReady
-        .then((store) => store.put(stored))
+        .then((store) => store.put(stored, previous?.tile))
         .catch(fail("Could not save the stroke to local storage"));
     },
     erase(objectId) {
