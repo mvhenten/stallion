@@ -1,15 +1,20 @@
 pub mod board;
 pub mod frame;
 pub mod object;
+pub mod store;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::time::Duration;
 
 use worker::*;
 
 use board::{BoardSync, Session};
 use frame::{Frame, FrameKind};
+use store::SqlTileStore;
 
 const BOARD_BINDING: &str = "BOARD";
+const FLUSH_DELAY: Duration = Duration::from_secs(5);
+const IDLE_MS: u64 = 60_000;
 
 fn board_id(path: &str) -> Option<&str> {
     let id = path.strip_prefix("/api/boards/")?.strip_suffix("/ws")?;
@@ -36,7 +41,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 #[durable_object]
 pub struct Board {
     state: State,
-    board: RefCell<BoardSync>,
+    board: RefCell<BoardSync<SqlTileStore>>,
+    flush_armed: Cell<bool>,
 }
 
 impl Board {
@@ -74,13 +80,27 @@ impl Board {
             .map_err(Error::RustError)?;
         self.deliver(ws, outgoing)
     }
+
+    async fn arm_flush(&self) -> Result<()> {
+        if self.flush_armed.get() || !self.board.borrow().has_dirty() {
+            return Ok(());
+        }
+        self.flush_armed.set(true);
+        let armed = self.state.storage().set_alarm(FLUSH_DELAY).await;
+        if armed.is_err() {
+            self.flush_armed.set(false);
+        }
+        armed
+    }
 }
 
 impl DurableObject for Board {
     fn new(state: State, _env: Env) -> Self {
+        let store = SqlTileStore::new(state.storage().sql());
         Board {
             state,
-            board: RefCell::new(BoardSync::new(|| Date::now().as_millis())),
+            board: RefCell::new(BoardSync::new(|| Date::now().as_millis(), store)),
+            flush_armed: Cell::new(false),
         }
     }
 
@@ -116,7 +136,8 @@ impl DurableObject for Board {
         match result {
             Ok(outgoing) => {
                 ws.serialize_attachment(&session)?;
-                self.deliver(&ws, outgoing)
+                self.deliver(&ws, outgoing)?;
+                self.arm_flush().await
             }
             Err(reason) => Self::reject(&ws, tile_key, reason),
         }
@@ -134,6 +155,14 @@ impl DurableObject for Board {
 
     async fn websocket_error(&self, ws: WebSocket, _error: Error) -> Result<()> {
         self.leave(&ws)
+    }
+
+    async fn alarm(&self) -> Result<Response> {
+        self.flush_armed.set(false);
+        let mut board = self.board.borrow_mut();
+        let flushed = board.flush().map_err(Error::RustError)?;
+        board.evict_idle(IDLE_MS);
+        Response::ok(format!("flushed {flushed} tiles"))
     }
 }
 

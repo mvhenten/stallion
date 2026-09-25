@@ -88,6 +88,10 @@ impl StallionObject {
         self.common().object_id
     }
 
+    pub fn bbox(&self) -> &Bbox {
+        self.common().bbox
+    }
+
     fn common(&self) -> Common<'_> {
         match self {
             StallionObject::Stroke(o) => Common {

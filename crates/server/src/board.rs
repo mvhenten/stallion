@@ -8,6 +8,7 @@ use yrs::updates::encoder::Encode;
 use yrs::{Any, ClientID, Doc, Map, Out, ReadTxn, StateVector, Transact, Update};
 
 use crate::frame::{BOARD_KEY, Frame, FrameKind, parse_tile_key};
+use crate::store::{TileRecord, TileStore};
 
 pub const OBJECTS: &str = "objects";
 
@@ -41,25 +42,81 @@ pub struct Outgoing {
 }
 
 enum Applied {
-    Integrated,
+    Integrated { changed: bool },
     MissingDependencies,
 }
 
-pub struct BoardSync {
+struct Tile {
+    doc: Doc,
+    used_at: u64,
+}
+
+pub struct BoardSync<S> {
     awareness: Awareness,
-    tiles: HashMap<String, Doc>,
+    clock: Box<dyn Clock>,
+    store: S,
+    tiles: HashMap<String, Tile>,
+    dirty: BTreeSet<String>,
 }
 
 fn read_error(e: ReadError) -> String {
     format!("invalid y-protocols payload: {e}")
 }
 
-impl BoardSync {
-    pub fn new<C: Clock + 'static>(clock: C) -> Self {
+impl<S: TileStore> BoardSync<S> {
+    pub fn new<C: Clock + Clone + 'static>(clock: C, store: S) -> Self {
         BoardSync {
-            awareness: Awareness::with_clock(Doc::new(), clock),
+            awareness: Awareness::with_clock(Doc::new(), clock.clone()),
+            clock: Box::new(clock),
+            store,
             tiles: HashMap::new(),
+            dirty: BTreeSet::new(),
         }
+    }
+
+    pub fn has_dirty(&self) -> bool {
+        !self.dirty.is_empty()
+    }
+
+    pub fn flush(&mut self) -> Result<usize, String> {
+        let now = self.clock.now();
+        let keys: Vec<String> = self.dirty.iter().cloned().collect();
+        for key in &keys {
+            if let Some(tile) = self.tiles.get(key) {
+                self.store.save(&compact(key, &tile.doc, now)?)?;
+            }
+            self.dirty.remove(key);
+        }
+        Ok(keys.len())
+    }
+
+    pub fn evict_idle(&mut self, idle_ms: u64) {
+        let now = self.clock.now();
+        let dirty = &self.dirty;
+        self.tiles
+            .retain(|key, tile| dirty.contains(key) || now.saturating_sub(tile.used_at) < idle_ms);
+    }
+
+    fn tile(&mut self, key: &str) -> Result<Doc, String> {
+        let now = self.clock.now();
+        if let Some(tile) = self.tiles.get_mut(key) {
+            tile.used_at = now;
+            return Ok(tile.doc.clone());
+        }
+        let doc = Doc::new();
+        if let Some(state) = self.store.load(parse_tile_key(key)?)? {
+            doc.transact_mut()
+                .apply_update(decode_update(&state)?)
+                .map_err(|e| e.to_string())?;
+        }
+        self.tiles.insert(
+            key.to_owned(),
+            Tile {
+                doc: doc.clone(),
+                used_at: now,
+            },
+        );
+        Ok(doc)
     }
 
     pub fn open(&self) -> Result<Vec<Frame>, String> {
@@ -99,8 +156,7 @@ impl BoardSync {
     ) -> Result<Vec<Outgoing>, String> {
         match frame.kind {
             FrameKind::Subscribe => {
-                parse_tile_key(&frame.tile_key)?;
-                let doc = self.tiles.entry(frame.tile_key.clone()).or_default();
+                let doc = self.tile(&frame.tile_key)?;
                 let step1 = SyncMessage::SyncStep1(doc.transact().state_vector()).encode_v1();
                 session.tiles.insert(frame.tile_key.clone());
                 Ok(vec![reply(Frame::new(
@@ -136,7 +192,7 @@ impl BoardSync {
         if !session.tiles.contains(&key) {
             return Err(format!("tile {key:?} is not subscribed"));
         }
-        let doc = self.tiles.entry(key.clone()).or_default();
+        let doc = self.tile(&key)?;
         match SyncMessage::decode_v1(&frame.payload).map_err(read_error)? {
             SyncMessage::SyncStep1(sv) => {
                 let step2 = SyncMessage::SyncStep2(doc.transact().encode_state_as_update_v1(&sv));
@@ -147,8 +203,11 @@ impl BoardSync {
                 ))])
             }
             SyncMessage::SyncStep2(update) | SyncMessage::Update(update) => {
-                match apply(doc, &update)? {
-                    Applied::Integrated => {
+                match apply(&doc, &update)? {
+                    Applied::Integrated { changed } => {
+                        if changed {
+                            self.dirty.insert(key.clone());
+                        }
                         let payload = SyncMessage::Update(update).encode_v1();
                         Ok(vec![Outgoing {
                             route: Route::Tile(key.clone()),
@@ -167,6 +226,29 @@ impl BoardSync {
             }
         }
     }
+}
+
+pub fn compact(key: &str, doc: &Doc, updated_at: u64) -> Result<TileRecord, String> {
+    let coord = parse_tile_key(key)?;
+    let txn = doc.transact();
+    let doc_state = txn.encode_state_as_update_v1(&StateVector::default());
+    let mut objects = Vec::new();
+    if let Some(map) = txn.get_map(OBJECTS) {
+        for (object_id, value) in map.iter(&txn) {
+            let Out::Any(Any::Buffer(bytes)) = value else {
+                return Err(format!("object {object_id:?} must be a CBOR byte string"));
+            };
+            let object = crate::object::decode(&bytes)?;
+            objects.push((object_id.to_owned(), object.bbox().clone()));
+        }
+    }
+    objects.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(TileRecord {
+        coord,
+        doc_state,
+        updated_at,
+        objects,
+    })
 }
 
 fn reply(frame: Frame) -> Outgoing {
@@ -214,10 +296,12 @@ fn apply(doc: &Doc, update: &[u8]) -> Result<Applied, String> {
             }
         }
     }
+    let update = decode_update(update)?;
+    let changed = !update.is_empty();
     doc.transact_mut()
-        .apply_update(decode_update(update)?)
+        .apply_update(update)
         .map_err(|e| e.to_string())?;
-    Ok(Applied::Integrated)
+    Ok(Applied::Integrated { changed })
 }
 
 fn validate_entry(object_id: &str, value: &Out) -> Result<(), String> {
@@ -238,8 +322,35 @@ fn validate_entry(object_id: &str, value: &Out) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::object::tests::fixture;
+    use crate::store::TileCoord;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     const TILE: &str = "0:0:0";
+
+    #[derive(Clone, Default)]
+    struct MemoryStore {
+        rows: Rc<RefCell<HashMap<TileCoord, TileRecord>>>,
+        saves: Rc<RefCell<usize>>,
+    }
+
+    impl TileStore for MemoryStore {
+        fn load(&self, coord: TileCoord) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.rows.borrow().get(&coord).map(|r| r.doc_state.clone()))
+        }
+
+        fn save(&self, record: &TileRecord) -> Result<(), String> {
+            *self.saves.borrow_mut() += 1;
+            self.rows.borrow_mut().insert(record.coord, record.clone());
+            Ok(())
+        }
+    }
+
+    fn board() -> BoardSync<MemoryStore> {
+        BoardSync::new(|| 0, MemoryStore::default())
+    }
 
     struct Client {
         doc: Doc,
@@ -284,7 +395,7 @@ mod tests {
     }
 
     fn send(
-        board: &mut BoardSync,
+        board: &mut BoardSync<MemoryStore>,
         clients: &mut [Client],
         from: usize,
         frame: Frame,
@@ -301,7 +412,7 @@ mod tests {
         Ok(())
     }
 
-    fn pump(board: &mut BoardSync, clients: &mut [Client]) {
+    fn pump(board: &mut BoardSync<MemoryStore>, clients: &mut [Client]) {
         loop {
             let pending: Vec<(usize, Vec<Frame>)> = clients
                 .iter_mut()
@@ -319,7 +430,7 @@ mod tests {
         }
     }
 
-    fn connect(board: &mut BoardSync, clients: &mut [Client], i: usize) {
+    fn connect(board: &mut BoardSync<MemoryStore>, clients: &mut [Client], i: usize) {
         send(
             board,
             clients,
@@ -347,7 +458,7 @@ mod tests {
 
     #[test]
     fn two_docs_converge_through_the_board_and_invalid_objects_are_rejected() {
-        let mut board = BoardSync::new(|| 0);
+        let mut board = board();
         let mut clients = [Client::new(), Client::new(), Client::new()];
         put(&clients[0], "stroke-0001", fixture());
         connect(&mut board, &mut clients, 0);
@@ -385,5 +496,61 @@ mod tests {
         let closed = board.close(&clients[0].session).unwrap();
         let gone = AwarenessUpdate::decode_v1(&closed[0].frame.payload).unwrap();
         assert_eq!(&*gone.clients[&ClientID::new(7)].json, "null");
+    }
+
+    #[test]
+    fn flushes_only_dirty_tiles_as_compacted_state_and_reloads_after_eviction() {
+        let store = MemoryStore::default();
+        let time = Arc::new(AtomicU64::new(0));
+        let clock = {
+            let time = time.clone();
+            move || time.load(Ordering::SeqCst)
+        };
+        let mut board = BoardSync::new(clock.clone(), store.clone());
+        let mut clients = [Client::new(), Client::new()];
+        connect(&mut board, &mut clients, 0);
+        assert!(!board.has_dirty(), "a subscribe must not dirty the tile");
+
+        let mut sent = 0;
+        for _ in 0..20 {
+            let update = put(&clients[0], "stroke-0001", fixture());
+            sent += update.payload.len();
+            send(&mut board, &mut clients, 0, update).unwrap();
+        }
+        assert!(board.has_dirty());
+        time.store(1_000, Ordering::SeqCst);
+        assert_eq!(board.flush(), Ok(1));
+        assert_eq!(board.flush(), Ok(0), "a clean tile was written again");
+        assert_eq!(*store.saves.borrow(), 1);
+
+        let record = store.rows.borrow()[&(0, 0, 0)].clone();
+        assert_eq!(record.updated_at, 1_000);
+        assert!(
+            record.doc_state.len() < sent / 2,
+            "state {} is not compacted against {sent} bytes of updates",
+            record.doc_state.len()
+        );
+        assert_eq!(record.objects.len(), 1);
+        assert_eq!(record.objects[0].0, "stroke-0001");
+        assert_eq!(
+            crate::store::bbox_json(&record.objects[0].1),
+            "[10,12.5,42,30.25]"
+        );
+
+        time.store(59_999, Ordering::SeqCst);
+        board.evict_idle(60_000);
+        assert_eq!(board.tiles.len(), 1);
+        time.store(60_000, Ordering::SeqCst);
+        board.evict_idle(60_000);
+        assert!(board.tiles.is_empty());
+
+        connect(&mut board, &mut clients, 1);
+        assert!(stored(&clients[1].doc, "stroke-0001").is_some());
+
+        let mut restarted = BoardSync::new(clock, store.clone());
+        let mut fresh = [Client::new()];
+        connect(&mut restarted, &mut fresh, 0);
+        assert!(stored(&fresh[0].doc, "stroke-0001").is_some());
+        assert!(!restarted.has_dirty());
     }
 }
