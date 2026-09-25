@@ -8,7 +8,7 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 - One PR per stage, in issue order.
 - npm workspaces with one lockfile at the root. Current major versions of every tool.
 - Biome formats and lints TypeScript; `cargo fmt` and `clippy` cover Rust. Run `npm run fix` before every commit.
-- Minimal tests, speed over coverage: Vitest with a smoke test per package, `cargo test` for the crate. No coverage thresholds, no Playwright yet.
+- Minimal tests, speed over coverage: Vitest with a smoke test per package, `cargo test` for the crate. No coverage thresholds; Playwright only drives `npm run smoke`.
 - CI is one fast job. It is the test runner; push instead of running suites locally.
 
 ## Scripts
@@ -20,8 +20,14 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 | `npm run typecheck` | `tsc` over every package |
 | `npm test` / `test:rust` | Vitest / `cargo test` |
 | `npm run build` / `build:worker` | Vite build of `apps/web` / wasm bundle in `crates/server/build` |
+| `npm run smoke -- [--pull] [url]` | One real page load on a touch tablet, light and dark: draw, reload, check the stroke |
+| `npm run serve:sync` | Build `apps/web` against the local worker and serve both with `wrangler dev` on port 8787 |
 
 `wrangler.jsonc` runs the worker from `crates/server/build` and serves `apps/web/dist` as static assets.
+
+## Smoke
+
+After pushing to main, run `npm run smoke -- --pull` and paste its result in the final summary. It fast-forwards `~/development/stallion`, reinstalls, then loads the live dev server (default `http://100.104.44.51:5173/b/default`) headless on a Galaxy Tab S9 viewport in light and dark, draws one touch stroke, reloads and checks the stroke is stored and visible. Any console error or failed request fails it. Screenshots land in `~/development/.tmp/stallion-smoke/<timestamp>/`. A push is not done until the smoke passes.
 
 ## Deploy
 
