@@ -73,8 +73,12 @@ const draftBounds = (draft: Draft): BBox => {
   };
 };
 
-const newObjectId = (): string =>
-  `${Date.now().toString(36).padStart(9, "0")}${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+const randomHex = (bytes: number): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+const newObjectId = (): string => `${Date.now().toString(36).padStart(9, "0")}${randomHex(6)}`;
 
 export const finishDraft = (draft: Draft): StoredObject | undefined => {
   if (draft.points.length === 0) return undefined;
