@@ -1,0 +1,35 @@
+import { Encoder } from "cbor-x";
+import { z } from "zod";
+
+export const frameKind = z.enum(["Subscribe", "Unsubscribe", "Sync", "Awareness", "Reject"]);
+
+export const frame = z.strictObject({
+  tileKey: z.string(),
+  kind: frameKind,
+  payload: z.instanceof(Uint8Array),
+});
+
+export type FrameKind = z.infer<typeof frameKind>;
+export type Frame = z.infer<typeof frame>;
+
+export const BOARD_KEY = "";
+
+export type FrameResult = { ok: true; value: Frame } | { ok: false; error: string };
+
+const cbor = new Encoder({
+  useRecords: false,
+  mapsAsObjects: true,
+  variableMapSize: true,
+  tagUint8Array: false,
+});
+
+export const encodeFrame = (value: Frame): Uint8Array =>
+  cbor.encode({ tileKey: value.tileKey, kind: value.kind, payload: value.payload });
+
+export const decodeFrame = (bytes: Uint8Array): FrameResult => {
+  const parsed = frame.safeParse(cbor.decode(bytes));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.message };
+  }
+  return { ok: true, value: parsed.data };
+};

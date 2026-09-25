@@ -8,5 +8,9 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
 worker = "0.8.6"
 worker-macros = "0.8.6"
+yrs = "0.28"

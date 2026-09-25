@@ -1,0 +1,220 @@
+use serde::{Deserialize, Serialize};
+
+pub const MAX_POINTS: usize = 4096;
+pub const MAX_TEXT: usize = 4096;
+pub const MAX_OBJECT_ID: usize = 64;
+pub const ZOOM_RANGE: std::ops::RangeInclusive<i32> = -40..=40;
+pub const MAX_COLOUR: u8 = 5;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bbox {
+    #[serde(rename = "minX")]
+    pub min_x: f64,
+    #[serde(rename = "minY")]
+    pub min_y: f64,
+    #[serde(rename = "maxX")]
+    pub max_x: f64,
+    #[serde(rename = "maxY")]
+    pub max_y: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PencilSize {
+    Small,
+    Medium,
+    Large,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShapeKind {
+    Rectangle,
+    Ellipse,
+    Line,
+}
+
+pub type Point = (f64, f64, f64);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Stroke {
+    pub object_id: String,
+    pub native_zoom: i32,
+    pub bbox: Bbox,
+    pub colour: u8,
+    pub size: PencilSize,
+    pub points: Vec<Point>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Shape {
+    pub object_id: String,
+    pub native_zoom: i32,
+    pub bbox: Bbox,
+    pub colour: u8,
+    pub size: PencilSize,
+    pub shape: ShapeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Text {
+    pub object_id: String,
+    pub native_zoom: i32,
+    pub bbox: Bbox,
+    pub colour: u8,
+    pub size: PencilSize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum StallionObject {
+    Stroke(Stroke),
+    Shape(Shape),
+    Text(Text),
+}
+
+struct Common<'a> {
+    object_id: &'a str,
+    native_zoom: i32,
+    bbox: &'a Bbox,
+    colour: u8,
+}
+
+impl StallionObject {
+    pub fn object_id(&self) -> &str {
+        self.common().object_id
+    }
+
+    fn common(&self) -> Common<'_> {
+        match self {
+            StallionObject::Stroke(o) => Common {
+                object_id: &o.object_id,
+                native_zoom: o.native_zoom,
+                bbox: &o.bbox,
+                colour: o.colour,
+            },
+            StallionObject::Shape(o) => Common {
+                object_id: &o.object_id,
+                native_zoom: o.native_zoom,
+                bbox: &o.bbox,
+                colour: o.colour,
+            },
+            StallionObject::Text(o) => Common {
+                object_id: &o.object_id,
+                native_zoom: o.native_zoom,
+                bbox: &o.bbox,
+                colour: o.colour,
+            },
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let common = self.common();
+        let id = common.object_id;
+        let id_ok = !id.is_empty()
+            && id.len() <= MAX_OBJECT_ID
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !id_ok {
+            return Err(format!("objectId {id:?} must match [0-9A-Za-z_-]{{1,64}}"));
+        }
+        if !ZOOM_RANGE.contains(&common.native_zoom) {
+            return Err(format!(
+                "nativeZoom {} is outside -40..40",
+                common.native_zoom
+            ));
+        }
+        if common.colour > MAX_COLOUR {
+            return Err(format!("colour {} is outside 0..5", common.colour));
+        }
+        let b = common.bbox;
+        if ![b.min_x, b.min_y, b.max_x, b.max_y]
+            .iter()
+            .all(|v| v.is_finite())
+        {
+            return Err("bbox must be finite".into());
+        }
+        match self {
+            StallionObject::Stroke(s) => validate_points(&s.points),
+            StallionObject::Shape(_) => Ok(()),
+            StallionObject::Text(t) => {
+                let len = t.text.encode_utf16().count();
+                if len == 0 || len > MAX_TEXT {
+                    return Err(format!("text length {len} is outside 1..{MAX_TEXT}"));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn validate_points(points: &[Point]) -> Result<(), String> {
+    if points.is_empty() || points.len() > MAX_POINTS {
+        return Err(format!(
+            "points length {} is outside 1..{MAX_POINTS}",
+            points.len()
+        ));
+    }
+    for &(x, y, pressure) in points {
+        if !x.is_finite() || !y.is_finite() {
+            return Err("points must be finite".into());
+        }
+        if !(0.0..=1.0).contains(&pressure) {
+            return Err(format!("pressure {pressure} is outside 0..1"));
+        }
+    }
+    Ok(())
+}
+
+pub fn decode(bytes: &[u8]) -> Result<StallionObject, String> {
+    let object: StallionObject =
+        ciborium::from_reader(bytes).map_err(|e| format!("invalid object: {e}"))?;
+    object.validate()?;
+    Ok(object)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    pub(crate) fn fixture() -> Vec<u8> {
+        let hex = include_str!("../../../packages/schema/fixtures/stroke.cbor.hex").trim();
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn decodes_the_golden_stroke_fixture() {
+        let expected = StallionObject::Stroke(Stroke {
+            object_id: "stroke-0001".into(),
+            native_zoom: -3,
+            bbox: Bbox {
+                min_x: 10.0,
+                min_y: 12.5,
+                max_x: 42.0,
+                max_y: 30.25,
+            },
+            colour: 2,
+            size: PencilSize::Medium,
+            points: vec![(10.0, 12.5, 0.5), (26.0, 20.0, 0.75), (42.0, 30.25, 1.0)],
+        });
+        assert_eq!(decode(&fixture()), Ok(expected));
+    }
+
+    #[test]
+    fn rejects_an_out_of_range_colour() {
+        let StallionObject::Stroke(mut stroke) = decode(&fixture()).unwrap() else {
+            unreachable!()
+        };
+        stroke.colour = 6;
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&StallionObject::Stroke(stroke), &mut bytes).unwrap();
+        assert!(decode(&bytes).unwrap_err().contains("colour"));
+    }
+}
