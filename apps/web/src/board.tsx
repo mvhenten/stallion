@@ -2,7 +2,7 @@ import { openBoard } from "@stallion/client-sync";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { errorMessage, reportLink } from "./report";
 import { createSurface, type Tool, type ToolMode } from "./surface";
-import { type Connection, openSource } from "./sync";
+import { type Connection, openSource, syncUrlFor } from "./sync";
 import { Toolbar } from "./toolbar";
 
 const SURFACE_CLASS: Record<ToolMode, string> = {
@@ -28,7 +28,7 @@ export function Board({ boardId }: { boardId: string }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const source = openSource({
-      url: import.meta.env.VITE_SYNC_URL,
+      url: syncUrlFor(import.meta.env.VITE_SYNC_URL, window.location),
       boardId,
       openBoard,
       onConnection: setConnection,

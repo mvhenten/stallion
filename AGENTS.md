@@ -21,9 +21,20 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 | `npm test` / `test:rust` | Vitest / `cargo test` |
 | `npm run build` / `build:worker` | Vite build of `apps/web` / wasm bundle in `crates/server/build` |
 | `npm run smoke -- [--pull] [url]` | One real page load on a touch tablet, light and dark: draw, reload, check the stroke |
+| `npm run demo:duo -- <url> [--board <id>]` | Two 1280x800 browsers on one board: A draws blue, B draws red on top; checks each sees the other's ink and both read Connected. Videos, a side-by-side `combined.mp4` and screenshots land in `~/development/.tmp/stallion-duo/<timestamp>/` |
 | `npm run serve:sync` | Build `apps/web` against the local worker and serve both with `wrangler dev` on port 8787 |
 
 `wrangler.jsonc` runs the worker from `crates/server/build` and serves `apps/web/dist` as static assets.
+
+## Sync URL
+
+The Worker serves both the assets and the WebSocket, so the client needs no build-time config in production. `syncUrlFor()` in `apps/web/src/sync.ts` picks the sync server once per board:
+
+1. `VITE_SYNC_URL`, when it was set at build time (`npm run serve:sync` sets it to the local worker).
+2. Otherwise local only, when the page is on localhost, a private LAN address, a tailnet address (`100.64.0.0/10`) or `*.ts.net`. That is the Vite dev server.
+3. Otherwise the page's own origin, `wss://<host>` (or `ws://` over http). `openBoard` appends `/api/boards/<boardId>/ws`.
+
+The deploy workflow builds without `VITE_SYNC_URL`, so the deployed app syncs with the Worker that served it.
 
 ## Smoke
 
