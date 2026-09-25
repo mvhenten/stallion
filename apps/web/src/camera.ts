@@ -49,7 +49,8 @@ export const pinch = (
   const start = midpoint(...from);
   const end = midpoint(...to);
   const spread = distance(...from);
-  const factor = spread > 0 ? distance(...to) / spread : 1;
+  const next = distance(...to);
+  const factor = spread > 0 && next > 0 ? next / spread : 1;
   return pan(zoomAt(camera, start, factor), end.x - start.x, end.y - start.y);
 };
 
