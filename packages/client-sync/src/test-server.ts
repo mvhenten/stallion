@@ -1,5 +1,12 @@
 import { type BBox, type LevelRange, type ViewTiles, viewTiles } from "@stallion/geometry";
-import { BOARD_KEY, decodeFrame, encodeFrame, type Frame, type FrameKind } from "@stallion/schema";
+import {
+  BOARD_KEY,
+  decodeFrame,
+  decodeMove,
+  encodeFrame,
+  type Frame,
+  type FrameKind,
+} from "@stallion/schema";
 import { decode as decodeCbor } from "cbor-x";
 import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
@@ -134,6 +141,9 @@ export class TestServer {
       case "Sync":
         this.sync(session, key, payload);
         return;
+      case "Move":
+        this.move(session, payload);
+        return;
       default:
         throw new Error(`clients cannot send ${frame.kind}`);
     }
@@ -188,7 +198,25 @@ export class TestServer {
       );
       return;
     }
-    Y.applyUpdate(doc, body, session);
+    this.update(session, key, body);
+  }
+
+  private move(session: Session, payload: Uint8Array): void {
+    const decoded = decodeMove(payload);
+    if (!decoded.ok) throw new Error(decoded.error);
+    const { fromTile, toTile, fromUpdate, toUpdate } = decoded.value;
+    for (const key of [fromTile, toTile]) {
+      if (!this.subscribed(session, key)) {
+        this.sendTo(session, key, "Reject", new TextEncoder().encode("tile is not subscribed"));
+        return;
+      }
+    }
+    this.update(session, fromTile, fromUpdate);
+    this.update(session, toTile, toUpdate);
+  }
+
+  private update(session: Session, key: string, body: Uint8Array): void {
+    Y.applyUpdate(this.doc(key), body, session);
     for (const other of this.sessions) {
       if (other !== session && this.subscribed(other, key)) {
         this.sendTo(

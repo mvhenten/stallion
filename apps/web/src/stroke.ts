@@ -136,3 +136,25 @@ export const draftScreenPath = (
     strokeWorldWidth(draft.size, draft.nativeZoom) * zoom,
     false,
   );
+
+export const translateStroke = (
+  tile: Tile,
+  stroke: Stroke,
+  dx: number,
+  dy: number,
+): StoredObject | undefined => {
+  const bbox = {
+    minX: stroke.bbox.minX + dx,
+    minY: stroke.bbox.minY + dy,
+    maxX: stroke.bbox.maxX + dx,
+    maxY: stroke.bbox.maxY + dy,
+  };
+  const placed = place(bbox);
+  if (!placed.ok) return undefined;
+  const points = stroke.points.map(([x, y, pressure]): StrokePoint => {
+    const world = fromTileLocal(tile, { x, y });
+    const local = toTileLocal(placed.tile, { x: world.x + dx, y: world.y + dy });
+    return [local.x, local.y, pressure];
+  });
+  return { tile: placed.tile, object: { ...stroke, bbox, points } };
+};

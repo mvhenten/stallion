@@ -24,7 +24,11 @@ pub struct TileSnapshot {
 
 pub trait TileStore {
     fn load(&self, coord: TileCoord) -> Result<Option<Vec<u8>>, String>;
-    fn save(&self, record: &TileRecord) -> Result<(), String>;
+    /// Writes every record or none. The Durable Object commits the synchronous writes of one
+    /// event, with no await between them, as a single transaction.
+    fn save_all(&self, records: &[TileRecord]) -> Result<(), String>;
+    /// Tiles whose flushed index holds `object_id`.
+    fn locate(&self, object_id: &str) -> Result<Vec<TileCoord>, String>;
     /// Tiles in `range` that hold objects, nearest to `center` first, cut before the
     /// running object count passes `budget`.
     fn range(
@@ -48,8 +52,9 @@ const RANGE_QUERY: &str = "SELECT c.tx, c.ty, t.doc_state, c.n FROM (
     WHERE c.running <= ?
     ORDER BY c.running";
 
-pub const MIGRATIONS: &[&[&str]] = &[&[
-    "CREATE TABLE tile (
+pub const MIGRATIONS: &[&[&str]] = &[
+    &[
+        "CREATE TABLE tile (
         level INTEGER NOT NULL,
         tx INTEGER NOT NULL,
         ty INTEGER NOT NULL,
@@ -57,7 +62,7 @@ pub const MIGRATIONS: &[&[&str]] = &[&[
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (level, tx, ty)
     )",
-    "CREATE TABLE object_index (
+        "CREATE TABLE object_index (
         level INTEGER NOT NULL,
         tx INTEGER NOT NULL,
         ty INTEGER NOT NULL,
@@ -65,7 +70,9 @@ pub const MIGRATIONS: &[&[&str]] = &[&[
         bbox TEXT NOT NULL,
         PRIMARY KEY (level, tx, ty, object_id)
     )",
-]];
+    ],
+    &["CREATE INDEX object_index_object ON object_index (object_id)"],
+];
 
 pub fn bbox_json(bbox: &Bbox) -> String {
     format!(
@@ -95,6 +102,33 @@ impl SqlTileStore {
         let cursor = self.sql.exec(query, bindings).map_err(|e| e.to_string())?;
         for row in cursor.raw() {
             row.map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn save(&self, record: &TileRecord) -> Result<(), String> {
+        let updated_at = i64::try_from(record.updated_at).map_err(|e| e.to_string())?;
+        let mut bindings = coord_bindings(record.coord);
+        bindings.push(record.doc_state.clone().into());
+        bindings.push(updated_at.into());
+        self.run(
+            "INSERT INTO tile (level, tx, ty, doc_state, updated_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (level, tx, ty)
+             DO UPDATE SET doc_state = excluded.doc_state, updated_at = excluded.updated_at",
+            bindings,
+        )?;
+        self.run(
+            "DELETE FROM object_index WHERE level = ? AND tx = ? AND ty = ?",
+            coord_bindings(record.coord),
+        )?;
+        for (object_id, bbox) in &record.objects {
+            let mut bindings = coord_bindings(record.coord);
+            bindings.push(object_id.as_str().into());
+            bindings.push(bbox_json(bbox).into());
+            self.run(
+                "INSERT INTO object_index (level, tx, ty, object_id, bbox) VALUES (?, ?, ?, ?, ?)",
+                bindings,
+            )?;
         }
         Ok(())
     }
@@ -138,6 +172,42 @@ impl SqlTileStore {
 }
 
 impl TileStore for SqlTileStore {
+    fn save_all(&self, records: &[TileRecord]) -> Result<(), String> {
+        self.migrate()?;
+        for record in records {
+            self.save(record)?;
+        }
+        Ok(())
+    }
+
+    fn locate(&self, object_id: &str) -> Result<Vec<TileCoord>, String> {
+        self.migrate()?;
+        let cursor = self
+            .sql
+            .exec(
+                "SELECT level, tx, ty FROM object_index WHERE object_id = ?",
+                vec![object_id.into()],
+            )
+            .map_err(|e| e.to_string())?;
+        let mut found = Vec::new();
+        for row in cursor.raw() {
+            let row = row.map_err(|e| e.to_string())?;
+            let [
+                SqlStorageValue::Integer(level),
+                SqlStorageValue::Integer(tx),
+                SqlStorageValue::Integer(ty),
+            ] = <[SqlStorageValue; 3]>::try_from(row)
+                .map_err(|row| format!("locate query returned {row:?}"))?
+            else {
+                return Err(format!(
+                    "locate query for {object_id:?} returned a malformed row"
+                ));
+            };
+            found.push((i32::try_from(level).map_err(|e| e.to_string())?, tx, ty));
+        }
+        Ok(found)
+    }
+
     fn load(&self, coord: TileCoord) -> Result<Option<Vec<u8>>, String> {
         self.migrate()?;
         let row = self
@@ -160,34 +230,6 @@ impl TileStore for SqlTileStore {
                 )),
             },
         }
-    }
-
-    fn save(&self, record: &TileRecord) -> Result<(), String> {
-        self.migrate()?;
-        let updated_at = i64::try_from(record.updated_at).map_err(|e| e.to_string())?;
-        let mut bindings = coord_bindings(record.coord);
-        bindings.push(record.doc_state.clone().into());
-        bindings.push(updated_at.into());
-        self.run(
-            "INSERT INTO tile (level, tx, ty, doc_state, updated_at) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT (level, tx, ty)
-             DO UPDATE SET doc_state = excluded.doc_state, updated_at = excluded.updated_at",
-            bindings,
-        )?;
-        self.run(
-            "DELETE FROM object_index WHERE level = ? AND tx = ? AND ty = ?",
-            coord_bindings(record.coord),
-        )?;
-        for (object_id, bbox) in &record.objects {
-            let mut bindings = coord_bindings(record.coord);
-            bindings.push(object_id.as_str().into());
-            bindings.push(bbox_json(bbox).into());
-            self.run(
-                "INSERT INTO object_index (level, tx, ty, object_id, bbox) VALUES (?, ?, ?, ?, ?)",
-                bindings,
-            )?;
-        }
-        Ok(())
     }
 
     fn range(

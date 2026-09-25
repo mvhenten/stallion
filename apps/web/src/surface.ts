@@ -24,14 +24,19 @@ import {
   startDraft,
   strokeFrame,
   strokeFramePath,
+  translateStroke,
 } from "./stroke";
 import type { BoardSource } from "./sync";
 
-export type ToolMode = "Pencil" | "Pan" | "Eraser";
+export type ToolMode = "Pencil" | "Pan" | "Eraser" | "Select";
 
 export type Tool = { size: PencilSize; primary: number; secondary: number; mode: ToolMode };
 
 type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; path: Path2D };
+
+type Drag = { objectId: string; from: Point; dx: number; dy: number };
+
+const SELECTION = "#0090ff";
 
 const BLOCKED_TOUCH_EVENTS = [
   "touchstart",
@@ -116,6 +121,8 @@ export function createSurface(
   let camera = loadCamera(boardId);
   let draft: Draft | undefined;
   let eraser: Point | undefined;
+  let selected: string | undefined;
+  let drag: Drag | undefined;
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -135,7 +142,9 @@ export function createSurface(
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const view = viewBounds(camera, width, height);
     for (const entry of ordered) {
-      if (!isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
+      const dragged = drag?.objectId === entry.stroke.objectId ? drag : undefined;
+      if (!dragged && !isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
+      const offset = dragged ?? { dx: 0, dy: 0 };
       const { origin } = entry.frame;
       const scale = entry.frame.scale * camera.zoom * dpr;
       ctx.setTransform(
@@ -143,8 +152,8 @@ export function createSurface(
         0,
         0,
         scale,
-        (origin.x - camera.x) * camera.zoom * dpr,
-        (origin.y - camera.y) * camera.zoom * dpr,
+        (origin.x + offset.dx - camera.x) * camera.zoom * dpr,
+        (origin.y + offset.dy - camera.y) * camera.zoom * dpr,
       );
       ctx.fillStyle = PALETTE[entry.stroke.colour] ?? PALETTE[0];
       ctx.fill(entry.path);
@@ -154,7 +163,28 @@ export function createSurface(
       ctx.fillStyle = PALETTE[draft.colour] ?? PALETTE[0];
       ctx.fill(draftScreenPath(draft, (world) => worldToScreen(camera, world), camera.zoom));
     }
+    renderSelection(dpr);
     if (cursors.length > 0) renderCursors(dpr);
+  };
+
+  const renderSelection = (dpr: number) => {
+    const entry = selected === undefined ? undefined : entries.get(selected);
+    if (!entry) return;
+    const { dx, dy } = drag ?? { dx: 0, dy: 0 };
+    const { bbox } = entry.stroke;
+    const topLeft = worldToScreen(camera, { x: bbox.minX + dx, y: bbox.minY + dy });
+    const bottomRight = worldToScreen(camera, { x: bbox.maxX + dx, y: bbox.maxY + dy });
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = SELECTION;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(
+      topLeft.x - 4,
+      topLeft.y - 4,
+      bottomRight.x - topLeft.x + 8,
+      bottomRight.y - topLeft.y + 8,
+    );
+    ctx.setLineDash([]);
   };
 
   const renderCursors = (dpr: number) => {
@@ -219,7 +249,45 @@ export function createSurface(
     eraser = screen;
   };
 
+  const pick = (screen: Point): Entry | undefined => {
+    const { width, height } = size();
+    const view = viewBounds(camera, width, height);
+    const world = screenToWorld(camera, screen);
+    return ordered.findLast(
+      (entry) =>
+        isVisible(entry.stroke.bbox, view, camera.zoom) &&
+        hitsStroke(entry.tile, entry.stroke, world, camera.zoom),
+    );
+  };
+
+  const startDrag = (screen: Point) => {
+    const hit = pick(screen);
+    selected = hit?.stroke.objectId;
+    drag = hit && {
+      objectId: hit.stroke.objectId,
+      from: screenToWorld(camera, screen),
+      dx: 0,
+      dy: 0,
+    };
+  };
+
+  const dragTo = (screen: Point) => {
+    if (!drag) return;
+    const world = screenToWorld(camera, screen);
+    drag = { ...drag, dx: world.x - drag.from.x, dy: world.y - drag.from.y };
+  };
+
+  const drop = () => {
+    const moved = drag;
+    drag = undefined;
+    const entry = moved && entries.get(moved.objectId);
+    if (!moved || !entry || (moved.dx === 0 && moved.dy === 0)) return;
+    const stored = translateStroke(entry.tile, entry.stroke, moved.dx, moved.dy);
+    if (stored) source.commit(stored);
+  };
+
   const discard = (objectId: string) => {
+    if (selected === objectId && !source.objects.has(objectId)) selected = undefined;
     const entry = entries.get(objectId);
     if (!entry) return;
     entries.delete(objectId);
@@ -309,6 +377,10 @@ export function createSurface(
       switch (effect.type) {
         case "StartStroke": {
           const tool = currentTool();
+          if (tool.mode === "Select") {
+            startDrag(localPoint(event));
+            break;
+          }
           if (tool.mode === "Eraser") {
             eraser = undefined;
             eraseTo(localPoint(event));
@@ -325,17 +397,20 @@ export function createSurface(
         case "ExtendStroke": {
           const samples = event.getCoalescedEvents?.() ?? [];
           for (const sample of samples.length > 0 ? samples : [event]) {
-            if (eraser) eraseTo(localPoint(sample));
+            if (drag) dragTo(localPoint(sample));
+            else if (eraser) eraseTo(localPoint(sample));
             else addPoint(sample);
           }
           break;
         }
         case "CommitStroke":
           eraser = undefined;
+          drop();
           commit();
           break;
         case "DiscardStroke":
           eraser = undefined;
+          drag = undefined;
           draft = undefined;
           break;
         case "Pan":
@@ -384,6 +459,14 @@ export function createSurface(
   };
 
   const onKey = (event: KeyboardEvent) => {
+    if (event.type === "keydown" && (event.key === "Delete" || event.key === "Backspace")) {
+      if (selected === undefined || currentTool().mode !== "Select") return;
+      event.preventDefault();
+      source.erase(selected);
+      selected = undefined;
+      requestRender();
+      return;
+    }
     if (event.code !== "Space") return;
     event.preventDefault();
     spaceDown = event.type === "keydown";

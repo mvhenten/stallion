@@ -42,6 +42,10 @@ body,
   cursor: grab;
 }
 
+.surface.selecting {
+  cursor: default;
+}
+
 .surface.erasing {
   cursor: cell;
 }
