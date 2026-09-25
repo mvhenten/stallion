@@ -34,7 +34,7 @@ The repository needs two Actions secrets:
 
 ## Wire protocol
 
-One Durable Object (`Board`) per board, reached at `GET /api/boards/{boardId}/ws` with a WebSocket upgrade. Sockets use the hibernation API; each socket's subscriptions and awareness client ids live in its attachment. Tile docs are held in memory until persistence lands; storage is SQLite (`Storage::sql()` in `worker` 0.8.6, `new_sqlite_classes`).
+One Durable Object (`Board`) per board, reached at `GET /api/boards/{boardId}/ws` with a WebSocket upgrade. Sockets use the hibernation API; each socket's subscriptions and awareness client ids live in its attachment. Tile docs load lazily from SQLite (`Storage::sql()` in `worker` 0.8.6, `new_sqlite_classes`) on first use. The `tile` table holds each doc as one compacted yrs update and `object_index` holds each object's bbox as JSON `[minX,minY,maxX,maxY]`; the `schema_migration` table records applied migrations. An alarm flushes dirty tiles 5 s after the first change, then evicts tiles idle for 60 s.
 
 Every message is one binary CBOR map `{tileKey, kind, payload}`. `payload` is a plain byte string (cbor-x `tagUint8Array: false`; the server also accepts tag 64). `encodeFrame` and `decodeFrame` in `packages/schema` are the client codec; `fixtures/frame.cbor.hex` pins the bytes for both sides.
 
