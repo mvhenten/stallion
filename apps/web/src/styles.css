@@ -143,3 +143,23 @@ body,
 .error p {
   margin: 0 0 8px;
 }
+
+.status {
+  width: 10px;
+  height: 10px;
+  margin: 0 4px;
+  border-radius: 50%;
+  background: #8b8d98;
+}
+
+.status[data-connection="Connected"] {
+  background: #30a46c;
+}
+
+.status[data-connection="Reconnecting"] {
+  background: #f76b15;
+}
+
+.status[data-connection="Offline"] {
+  background: #e5484d;
+}

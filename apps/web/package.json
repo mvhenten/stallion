@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@stallion/client-store": "*",
+    "@stallion/client-sync": "*",
     "@stallion/geometry": "*",
     "@stallion/schema": "*",
     "perfect-freehand": "^1.2.3",

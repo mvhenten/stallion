@@ -1,11 +1,12 @@
 import { PALETTE, PENCIL_SIZES } from "./stroke";
 import type { Tool } from "./surface";
+import { CONNECTION_LABEL, type Connection } from "./sync";
 
 const DOT_PX = { Small: 4, Medium: 9, Large: 16 } as const;
 
-type ToolbarProps = { tool: Tool; onChange: (tool: Tool) => void };
+type ToolbarProps = { tool: Tool; onChange: (tool: Tool) => void; connection: Connection };
 
-export function Toolbar({ tool, onChange }: ToolbarProps) {
+export function Toolbar({ tool, onChange, connection }: ToolbarProps) {
   return (
     <div class="toolbar" role="toolbar" aria-label="Drawing tools">
       <fieldset class="group" aria-label="Pencil size">
@@ -86,6 +87,13 @@ export function Toolbar({ tool, onChange }: ToolbarProps) {
         <span class="chip back" style={{ background: PALETTE[tool.secondary] }} />
         <span class="chip front" style={{ background: PALETTE[tool.primary] }} />
       </button>
+      <span
+        class="status"
+        data-connection={connection}
+        role="status"
+        aria-label={CONNECTION_LABEL[connection]}
+        title={CONNECTION_LABEL[connection]}
+      />
     </div>
   );
 }
