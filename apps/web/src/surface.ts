@@ -12,6 +12,7 @@ import {
   zoomAt,
 } from "./camera";
 import { isVisible } from "./culling";
+import { hitsStroke } from "./eraser";
 import { createGestures, type Effect, type PointerKind } from "./gesture";
 import {
   type Draft,
@@ -24,7 +25,9 @@ import {
   strokeLocalPath,
 } from "./stroke";
 
-export type Tool = { size: PencilSize; primary: number; secondary: number; pan: boolean };
+export type ToolMode = "Pencil" | "Pan" | "Eraser";
+
+export type Tool = { size: PencilSize; primary: number; secondary: number; mode: ToolMode };
 
 type Entry = { tile: Tile; stroke: Stroke; path: Path2D };
 
@@ -35,6 +38,8 @@ const BLOCKED_TOUCH_EVENTS = [
   "gesturechange",
   "gestureend",
 ] as const;
+
+const ERASER_STEP_PX = 4;
 
 const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
 
@@ -87,6 +92,8 @@ export function createSurface(
   let ordered: Entry[] = [];
   let camera = loadCamera(boardId);
   let draft: Draft | undefined;
+  let eraser: Point | undefined;
+  const erased = new Set<string>();
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -143,11 +150,46 @@ export function createSurface(
   };
 
   const add = ({ tile, object }: StoredObject) => {
-    if (object.type !== "Stroke" || entries.has(object.objectId)) return;
+    if (object.type !== "Stroke" || entries.has(object.objectId) || erased.has(object.objectId)) {
+      return;
+    }
     const entry = { tile, stroke: object, path: strokeLocalPath(tile, object) };
     entries.set(object.objectId, entry);
     const index = ordered.findIndex((other) => other.stroke.objectId > object.objectId);
     ordered = index === -1 ? [...ordered, entry] : ordered.toSpliced(index, 0, entry);
+  };
+
+  const erase = (entry: Entry) => {
+    const { objectId } = entry.stroke;
+    erased.add(objectId);
+    entries.delete(objectId);
+    ordered = ordered.filter((other) => other !== entry);
+    storeReady
+      .then((store) => store.remove(objectId, entry.tile))
+      .catch(fail("Could not delete the stroke from local storage"));
+  };
+
+  const eraseAt = (screen: Point) => {
+    const { width, height } = size();
+    const view = viewBounds(camera, width, height);
+    const world = screenToWorld(camera, screen);
+    for (const entry of ordered) {
+      if (!isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
+      if (hitsStroke(entry.tile, entry.stroke, world, camera.zoom)) erase(entry);
+    }
+  };
+
+  const eraseTo = (screen: Point) => {
+    const from = eraser ?? screen;
+    const steps = Math.max(
+      1,
+      Math.ceil(Math.hypot(screen.x - from.x, screen.y - from.y) / ERASER_STEP_PX),
+    );
+    for (let step = 1; step <= steps; step++) {
+      const t = step / steps;
+      eraseAt({ x: from.x + (screen.x - from.x) * t, y: from.y + (screen.y - from.y) * t });
+    }
+    eraser = screen;
   };
 
   const loadView = () => {
@@ -214,6 +256,11 @@ export function createSurface(
       switch (effect.type) {
         case "StartStroke": {
           const tool = currentTool();
+          if (tool.mode === "Eraser") {
+            eraser = undefined;
+            eraseTo(localPoint(event));
+            break;
+          }
           draft = startDraft(
             effect.secondary ? tool.secondary : tool.primary,
             tool.size,
@@ -224,13 +271,18 @@ export function createSurface(
         }
         case "ExtendStroke": {
           const samples = event.getCoalescedEvents?.() ?? [];
-          for (const sample of samples.length > 0 ? samples : [event]) addPoint(sample);
+          for (const sample of samples.length > 0 ? samples : [event]) {
+            if (eraser) eraseTo(localPoint(sample));
+            else addPoint(sample);
+          }
           break;
         }
         case "CommitStroke":
+          eraser = undefined;
           commit();
           break;
         case "DiscardStroke":
+          eraser = undefined;
           draft = undefined;
           break;
         case "Pan":
@@ -254,7 +306,7 @@ export function createSurface(
         button: event.button,
         point: localPoint(event),
       },
-      { panTool: currentTool().pan, spaceDown },
+      { panTool: currentTool().mode === "Pan", spaceDown },
     );
     apply(effects, event);
   };

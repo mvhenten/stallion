@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { createSurface, type Tool } from "./surface";
+import { createSurface, type Tool, type ToolMode } from "./surface";
 import { Toolbar } from "./toolbar";
 
 const ISSUE_URL = "https://github.com/mvhenten/stallion/issues/new";
+
+const SURFACE_CLASS: Record<ToolMode, string> = {
+  Pencil: "surface",
+  Pan: "surface panning",
+  Eraser: "surface erasing",
+};
 
 const reportLink = (message: string): string =>
   `${ISSUE_URL}?${new URLSearchParams({
@@ -16,7 +22,7 @@ export function Board({ boardId }: { boardId: string }) {
     size: "Medium",
     primary: 0,
     secondary: 4,
-    pan: false,
+    mode: "Pencil",
   });
   const [error, setError] = useState<string | undefined>(undefined);
   const toolRef = useRef(tool);
@@ -33,7 +39,7 @@ export function Board({ boardId }: { boardId: string }) {
     <main class="board">
       <canvas
         ref={canvasRef}
-        class={tool.pan ? "surface panning" : "surface"}
+        class={SURFACE_CLASS[tool.mode]}
         aria-label={`Drawing board ${boardId}`}
       />
       <Toolbar tool={tool} onChange={setTool} />

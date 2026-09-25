@@ -42,6 +42,10 @@ body,
   cursor: grab;
 }
 
+.surface.erasing {
+  cursor: cell;
+}
+
 .toolbar {
   position: fixed;
   top: 12px;

@@ -66,6 +66,7 @@ const openStallionDB = (name = DB_NAME): Promise<IDBPDatabase<StallionDB>> =>
 export type BoardStore = {
   put(stored: StoredObject): Promise<void>;
   query(ranges: readonly LevelRange[]): Promise<StoredObject[]>;
+  remove(objectId: string, tile: Tile): Promise<void>;
   close(): void;
 };
 
@@ -108,7 +109,11 @@ export async function openBoardStore(boardId: string): Promise<BoardStore> {
     return results.flat();
   };
 
-  return { put, query, close: () => db.close() };
+  const remove = async (objectId: string, tile: Tile): Promise<void> => {
+    await db.delete("objects", [boardId, tile.level, tile.tx, tile.ty, objectId]);
+  };
+
+  return { put, query, remove, close: () => db.close() };
 }
 
 export type TileState = { tile: Tile; state: Uint8Array };
