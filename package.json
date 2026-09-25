@@ -1,0 +1,29 @@
+{
+  "name": "stallion",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "fix": "biome check --write . && cargo fmt --all",
+    "lint": "biome check .",
+    "lint:rust": "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:rust": "cargo test --workspace",
+    "build": "npm run build --workspaces --if-present",
+    "build:worker": "cd crates/server && worker-build --release"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2",
+    "wrangler": "^4.141.0"
+  }
+}

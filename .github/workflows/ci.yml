@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: true
+      - run: command -v worker-build || cargo install --locked worker-build@^0.8
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run lint:rust
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:rust
+      - run: npm run build
+      - run: npm run build:worker
