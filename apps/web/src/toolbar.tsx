@@ -1,5 +1,6 @@
+import { LevelChip } from "./level-chip";
 import { PALETTE, PENCIL_SIZES } from "./stroke";
-import type { Tool } from "./surface";
+import type { SurfaceView, Tool } from "./surface";
 import { CONNECTION_LABEL, type Connection } from "./sync";
 
 const DOT_PX = { Small: 4, Medium: 9, Large: 16 } as const;
@@ -13,9 +14,20 @@ type ToolbarProps = {
   history: HistoryState;
   onUndo: () => void;
   onRedo: () => void;
+  view: SurfaceView;
+  onLevel: (level: number) => void;
 };
 
-export function Toolbar({ tool, onChange, connection, history, onUndo, onRedo }: ToolbarProps) {
+export function Toolbar({
+  tool,
+  onChange,
+  connection,
+  history,
+  onUndo,
+  onRedo,
+  view,
+  onLevel,
+}: ToolbarProps) {
   return (
     <div class="toolbar" role="toolbar" aria-label="Drawing tools">
       <fieldset class="group" aria-label="Pencil size">
@@ -154,6 +166,7 @@ export function Toolbar({ tool, onChange, connection, history, onUndo, onRedo }:
           </svg>
         </button>
       </fieldset>
+      <LevelChip level={view.level} contentLevels={view.contentLevels} onPick={onLevel} />
       <span
         class="status"
         data-connection={connection}

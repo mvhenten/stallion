@@ -1,6 +1,7 @@
 import type { StoredObject } from "@stallion/client-store";
 import type { Point, Tile } from "@stallion/geometry";
 import type { PencilSize, Stroke } from "@stallion/schema";
+import { Gesture } from "@use-gesture/vanilla";
 import {
   type Camera,
   pan,
@@ -10,10 +11,12 @@ import {
   wheelFactor,
   worldToScreen,
   zoomAt,
+  zoomTo,
 } from "./camera";
 import { isVisible } from "./culling";
 import { hitsStroke } from "./eraser";
-import { createGestures, type Effect, PENDING_MS, type PointerKind } from "./gesture";
+import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
+import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
 import {
   type Draft,
   draftScreenPath,
@@ -104,13 +107,16 @@ const saveCamera = (boardId: string, camera: Camera): void => {
   }
 };
 
-export type Surface = { dispose(): void };
+export type SurfaceView = { level: number; contentLevels: readonly number[] };
+
+export type Surface = { zoomToLevel(level: number): void; dispose(): void };
 
 export function createSurface(
   canvas: HTMLCanvasElement,
   boardId: string,
   source: BoardSource,
   currentTool: () => Tool,
+  onView: (view: SurfaceView) => void = () => undefined,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -129,7 +135,10 @@ export function createSurface(
   let pendingTimer: ReturnType<typeof setTimeout> | undefined;
   let cursors: RemoteCursor[] = [];
   let cursorSentAt = 0;
-  const gestures = createGestures();
+  let animation = 0;
+  let reported: SurfaceView | undefined;
+  let dragButton = 0;
+  const input = createInput();
   const awareness = source.awareness;
 
   const size = () => ({ width: canvas.clientWidth, height: canvas.clientHeight });
@@ -302,6 +311,7 @@ export function createSurface(
       else discard(objectId);
     }
     requestRender();
+    reportView();
   };
 
   const onAwareness = () => {
@@ -326,6 +336,21 @@ export function createSurface(
     awareness.setLocalStateField("cursor", screenToWorld(camera, screen));
   };
 
+  const reportView = () => {
+    const contentLevels = [...new Set(ordered.map((entry) => entry.stroke.nativeZoom))].sort(
+      (a, b) => a - b,
+    );
+    const level = levelOf(camera.zoom);
+    if (
+      reported &&
+      reported.level === level &&
+      reported.contentLevels.join() === contentLevels.join()
+    )
+      return;
+    reported = { level, contentLevels };
+    onView(reported);
+  };
+
   const updateView = () => {
     const { width, height } = size();
     source.view(viewBounds(camera, width, height), camera.zoom);
@@ -342,6 +367,7 @@ export function createSurface(
     camera = next;
     requestRender();
     settle();
+    reportView();
   };
 
   const commit = () => {
@@ -352,10 +378,13 @@ export function createSurface(
     source.commit(stored);
   };
 
-  const localPoint = (event: PointerEvent | WheelEvent): Point => {
+  const toLocal = (clientX: number, clientY: number): Point => {
     const rect = canvas.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    return { x: clientX - rect.left, y: clientY - rect.top };
   };
+
+  const localPoint = (event: PointerEvent | WheelEvent): Point =>
+    toLocal(event.clientX, event.clientY);
 
   const pressureOf = (event: PointerEvent): number =>
     event.pointerType === "pen" ? Math.min(1, Math.max(0, event.pressure)) : 0.5;
@@ -423,50 +452,92 @@ export function createSurface(
           moveCamera(pan(camera, effect.dx, effect.dy));
           break;
         case "Pinch":
-          moveCamera(pinch(camera, effect.from, effect.to));
+          moveCamera(pinch(camera, effect));
           break;
       }
     }
     if (effects.length > 0) requestRender();
   };
 
-  const onPointerDown = (event: PointerEvent) => {
-    event.preventDefault();
-    canvas.setPointerCapture(event.pointerId);
-    const effects = gestures.down(
+  const stopAnimation = () => {
+    cancelAnimationFrame(animation);
+    animation = 0;
+  };
+
+  const zoomToLevel = (level: number) => {
+    stopAnimation();
+    const from = camera;
+    const { width, height } = size();
+    const centre = { x: width / 2, y: height / 2 };
+    const target = zoomForLevel(level);
+    const started = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - started) / LEVEL_ANIMATION_MS);
+      moveCamera(zoomTo(from, centre, from.zoom * (target / from.zoom) ** easeOut(t)));
+      if (t < 1) {
+        animation = requestAnimationFrame(step);
+        return;
+      }
+      animation = 0;
+      moveCamera(zoomTo(from, centre, target));
+    };
+    animation = requestAnimationFrame(step);
+  };
+
+  const isPointerEvent = (event: Event): event is PointerEvent => "pointerId" in event;
+
+  const onDrag = ({ event, intentional }: { event: Event; intentional: boolean }) => {
+    if (!isPointerEvent(event)) return;
+    const first = event.type === "pointerdown";
+    const cancelled = event.type === "pointercancel";
+    const last = cancelled || event.type === "pointerup" || event.type === "lostpointercapture";
+    if (first) {
+      event.preventDefault();
+      stopAnimation();
+      dragButton = event.button;
+    }
+    const effects = input.drag(
       {
-        pointerId: event.pointerId,
+        first,
+        last,
+        cancelled,
+        intentional,
         kind: pointerKind(event),
-        button: event.button,
+        button: dragButton,
         point: localPoint(event),
         time: event.timeStamp,
       },
       { panTool: currentTool().mode === "Pan", spaceDown },
     );
     apply(effects, event);
-    if (event.pointerType !== "touch") return;
+    if (!first || event.pointerType !== "touch") return;
     clearTimeout(pendingTimer);
-    pendingTimer = setTimeout(() => apply(gestures.tick(performance.now())), PENDING_MS);
+    pendingTimer = setTimeout(() => apply(input.tick(performance.now())), PENDING_MS);
   };
 
-  const onPointerMove = (event: PointerEvent) => {
-    shareCursor(localPoint(event));
-    apply(gestures.move(event.pointerId, localPoint(event), event.timeStamp), event);
+  const onPinch = ({
+    first,
+    last,
+    origin,
+    da,
+  }: {
+    first: boolean;
+    last: boolean;
+    origin: [number, number];
+    da: [number, number];
+  }) => {
+    if (first) stopAnimation();
+    apply(input.pinch({ first, last, origin: toLocal(origin[0], origin[1]), distance: da[0] }));
   };
 
-  const onPointerUp = (event: PointerEvent) => {
-    apply(gestures.up(event.pointerId), event);
-  };
-
-  const onPointerCancel = (event: PointerEvent) => {
-    apply(gestures.cancel(event.pointerId), event);
-  };
-
-  const onWheel = (event: WheelEvent) => {
+  const onWheel = ({ event }: { event: WheelEvent }) => {
     event.preventDefault();
+    stopAnimation();
     const factor = wheelFactor(event.ctrlKey ? event.deltaY * 3 : event.deltaY, event.deltaMode);
     moveCamera(zoomAt(camera, localPoint(event), factor));
   };
+
+  const onPointerMove = (event: PointerEvent) => shareCursor(localPoint(event));
 
   const onKey = (event: KeyboardEvent) => {
     if (event.type === "keydown" && (event.key === "Delete" || event.key === "Backspace")) {
@@ -496,12 +567,21 @@ export function createSurface(
   });
   observer.observe(canvas);
 
-  canvas.addEventListener("pointerdown", onPointerDown);
+  const gesture = new Gesture(
+    canvas,
+    { onDrag, onPinch, onWheel },
+    {
+      eventOptions: { passive: false },
+      drag: {
+        threshold: DRAG_THRESHOLD_PX,
+        triggerAllEvents: true,
+        pointer: { buttons: -1, keys: false },
+      },
+      pinch: { pointer: { touch: true }, pinchOnWheel: false },
+    },
+  );
   canvas.addEventListener("pointermove", onPointerMove);
-  canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerCancel);
   canvas.addEventListener("pointerleave", onPointerLeave);
-  canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("contextmenu", preventDefault);
   for (const type of BLOCKED_TOUCH_EVENTS) {
     canvas.addEventListener(type, preventDefault, { passive: false });
@@ -513,19 +593,19 @@ export function createSurface(
   onObjects(new Set(source.objects.keys()));
   onAwareness();
   updateView();
+  reportView();
 
   return {
+    zoomToLevel,
     dispose() {
       clearTimeout(settleTimer);
       clearTimeout(pendingTimer);
       cancelAnimationFrame(frame);
+      stopAnimation();
+      gesture.destroy();
       observer.disconnect();
-      canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerCancel);
       canvas.removeEventListener("pointerleave", onPointerLeave);
-      canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", preventDefault);
       for (const type of BLOCKED_TOUCH_EVENTS) canvas.removeEventListener(type, preventDefault);
       window.removeEventListener("keydown", onKey);
