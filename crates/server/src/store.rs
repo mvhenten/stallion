@@ -72,6 +72,18 @@ pub const MIGRATIONS: &[&[&str]] = &[
     )",
     ],
     &["CREATE INDEX object_index_object ON object_index (object_id)"],
+    &[
+        "CREATE TABLE board_lock (
+        lock_id INTEGER PRIMARY KEY CHECK (lock_id = 1),
+        pin_hash TEXT NOT NULL,
+        generation INTEGER NOT NULL
+    )",
+        "CREATE TABLE pin_attempt (
+        client TEXT PRIMARY KEY,
+        attempts TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    )",
+    ],
 ];
 
 pub fn bbox_json(bbox: &Bbox) -> String {
@@ -99,11 +111,7 @@ impl SqlTileStore {
     }
 
     fn run(&self, query: &str, bindings: Vec<SqlStorageValue>) -> Result<(), String> {
-        let cursor = self.sql.exec(query, bindings).map_err(|e| e.to_string())?;
-        for row in cursor.raw() {
-            row.map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        run(&self.sql, query, bindings)
     }
 
     fn save(&self, record: &TileRecord) -> Result<(), String> {
@@ -134,41 +142,54 @@ impl SqlTileStore {
     }
 
     fn migrate(&self) -> Result<(), String> {
-        if self.migrated.get() {
-            return Ok(());
+        if !self.migrated.get() {
+            migrate(&self.sql)?;
+            self.migrated.set(true);
         }
-        self.run(
-            "CREATE TABLE IF NOT EXISTS schema_migration (version INTEGER PRIMARY KEY)",
-            vec![],
-        )?;
-        let current = self
-            .sql
-            .exec(
-                "SELECT COALESCE(MAX(version), 0) FROM schema_migration",
-                None,
-            )
-            .map_err(|e| e.to_string())?
-            .raw()
-            .next()
-            .transpose()
-            .map_err(|e| e.to_string())?;
-        let applied = match current.as_deref() {
-            Some([SqlStorageValue::Integer(v)]) => usize::try_from(*v).unwrap_or(0),
-            _ => 0,
-        };
-        for (index, steps) in MIGRATIONS.iter().enumerate().skip(applied) {
-            for step in *steps {
-                self.run(step, vec![])?;
-            }
-            let version = i64::try_from(index + 1).map_err(|e| e.to_string())?;
-            self.run(
-                "INSERT INTO schema_migration (version) VALUES (?)",
-                vec![version.into()],
-            )?;
-        }
-        self.migrated.set(true);
         Ok(())
     }
+}
+
+pub fn run(sql: &SqlStorage, query: &str, bindings: Vec<SqlStorageValue>) -> Result<(), String> {
+    let cursor = sql.exec(query, bindings).map_err(|e| e.to_string())?;
+    for row in cursor.raw() {
+        row.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn migrate(sql: &SqlStorage) -> Result<(), String> {
+    run(
+        sql,
+        "CREATE TABLE IF NOT EXISTS schema_migration (version INTEGER PRIMARY KEY)",
+        vec![],
+    )?;
+    let current = sql
+        .exec(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migration",
+            None,
+        )
+        .map_err(|e| e.to_string())?
+        .raw()
+        .next()
+        .transpose()
+        .map_err(|e| e.to_string())?;
+    let applied = match current.as_deref() {
+        Some([SqlStorageValue::Integer(v)]) => usize::try_from(*v).unwrap_or(0),
+        _ => 0,
+    };
+    for (index, steps) in MIGRATIONS.iter().enumerate().skip(applied) {
+        for step in *steps {
+            run(sql, step, vec![])?;
+        }
+        let version = i64::try_from(index + 1).map_err(|e| e.to_string())?;
+        run(
+            sql,
+            "INSERT INTO schema_migration (version) VALUES (?)",
+            vec![version.into()],
+        )?;
+    }
+    Ok(())
 }
 
 impl TileStore for SqlTileStore {

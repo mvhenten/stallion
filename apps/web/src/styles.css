@@ -298,3 +298,137 @@ body,
     padding: 6px;
   }
 }
+
+.field {
+  min-width: 0;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font:
+    15px system-ui,
+    sans-serif;
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: manipulation;
+}
+
+.field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.field.pin {
+  width: 9ch;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.15em;
+}
+
+.action {
+  flex: none;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font:
+    600 14px system-ui,
+    sans-serif;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.action.quiet {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--ink);
+}
+
+.action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.share {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 88px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 4px 16px #00000024;
+  touch-action: pan-y;
+}
+
+.share h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.share-link,
+.share-form,
+.pin-row {
+  display: flex;
+  gap: 8px;
+}
+
+.share-link .field {
+  flex: 1;
+}
+
+.share-qr {
+  display: grid;
+  place-items: center;
+}
+
+.qr {
+  width: 200px;
+  height: 200px;
+}
+
+.qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.share-pin,
+.share-note {
+  margin: 0;
+  font-size: 14px;
+}
+
+.share-note.failed,
+.pin-failure {
+  color: #8a1c1f;
+}
+
+.notice.pin-prompt {
+  flex-wrap: wrap;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: min(520px, calc(100vw - 32px));
+  box-sizing: border-box;
+}
+
+.pin-prompt p {
+  flex: 1 1 200px;
+}
+
+.pin-prompt .pin-failure {
+  flex-basis: 100%;
+  margin: 0;
+}

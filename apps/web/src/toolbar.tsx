@@ -16,6 +16,8 @@ type ToolbarProps = {
   onRedo: () => void;
   view: SurfaceView;
   onLevel: (level: number) => void;
+  shareOpen: boolean;
+  onShare: () => void;
 };
 
 export function Toolbar({
@@ -27,6 +29,8 @@ export function Toolbar({
   onRedo,
   view,
   onLevel,
+  shareOpen,
+  onShare,
 }: ToolbarProps) {
   return (
     <div class="toolbar" role="toolbar" aria-label="Drawing tools">
@@ -166,6 +170,25 @@ export function Toolbar({
           </svg>
         </button>
       </fieldset>
+      <button
+        type="button"
+        class="tool"
+        data-share-toggle
+        aria-pressed={shareOpen}
+        aria-label="Share"
+        title="Share the board link, QR code and PIN"
+        onClick={onShare}
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path
+            d="M8.6 10.6l6.8-4M8.6 13.4l6.8 4M18 5a2.5 2.5 0 11-.01 0M6 9.5a2.5 2.5 0 11-.01 0M18 16.5a2.5 2.5 0 11-.01 0"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
       <LevelChip level={view.level} contentLevels={view.contentLevels} onPick={onLevel} />
       <span
         class="status"

@@ -5,6 +5,7 @@ import { afterEach, expect, test } from "vitest";
 import {
   type BoardError,
   HANDSHAKE_FAILURES_REPORTED,
+  memoryPasses,
   openBoard,
   type StallionBoard,
 } from "./index";
@@ -19,6 +20,8 @@ let databases = 0;
 const open = (server: TestServer): StallionBoard => {
   const board = openBoard("ws://test", "board", {
     connect: server.connect,
+    fetch: server.fetch,
+    passes: memoryPasses(),
     cache: { name: `sync-test-${databases++}` },
     backoff: { initialMs: 5, maxMs: 20 },
     onError: () => {},
@@ -100,6 +103,7 @@ test("a server that keeps refusing the websocket handshake surfaces an error", a
   const errors: BoardError[] = [];
   const board = openBoard("wss://host", "board", {
     connect: server.connect,
+    fetch: server.fetch,
     cache: { name: `sync-test-${databases++}` },
     backoff: { initialMs: 1, maxMs: 2 },
     onError: (error) => errors.push(error),
@@ -109,6 +113,40 @@ test("a server that keeps refusing the websocket handshake surfaces an error", a
   expect(errors[0]?.reason).toBe(
     `the server refused the board connection wss://host/api/boards/board/ws ${HANDSHAKE_FAILURES_REPORTED} times in a row; still retrying`,
   );
+});
+
+test("a locked board asks for a PIN, and a join stores the pass and reconnects", async () => {
+  const server = new TestServer();
+  server.pin = "123456";
+  const alice = open(server);
+  const passes = memoryPasses();
+  const bob = openBoard("ws://test", "board", {
+    connect: server.connect,
+    fetch: server.fetch,
+    passes,
+    cache: { name: `sync-test-${databases++}` },
+    backoff: { initialMs: 5, maxMs: 20 },
+    onError: () => {},
+  });
+  bob.setView(VIEW, 1);
+  boards.push(bob);
+
+  await until(() => bob.status === "NeedsPin", "the needs-PIN state");
+  expect(bob.lock).toEqual({ reason: "PinRequired", message: "this board is locked with a PIN" });
+  expect(alice.status).toBe("NeedsPin");
+
+  expect(await bob.join("000000")).toEqual({ ok: false, reason: "WrongPin", message: "wrong PIN" });
+  expect(bob.status).toBe("NeedsPin");
+
+  expect(await bob.join("123456")).toEqual({ ok: true });
+  expect(passes.get("board")).toBe("pass-1");
+  expect(bob.lock).toBeUndefined();
+  await until(() => bob.status === "Open", "bob to reconnect with the pass");
+
+  expect(await alice.join("123456")).toEqual({ ok: true });
+  await until(() => alice.status === "Open", "alice to reconnect");
+  alice.put(stroke("after-join"));
+  await until(() => bob.objects.has("after-join"), "bob to receive the stroke");
 });
 
 test("offline edits replay after reconnect", async () => {

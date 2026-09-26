@@ -2,7 +2,7 @@ import type { StoredObject } from "@stallion/client-store";
 import type { LiveObjects } from "@stallion/client-sync";
 import { afterEach, expect, test, vi } from "vitest";
 import { createSurface, PAPER } from "./surface";
-import type { BoardSource } from "./sync";
+import type { DrawingSource } from "./sync";
 
 const stored: StoredObject = {
   tile: { level: 0, tx: 0, ty: 0 },
@@ -69,7 +69,7 @@ test("each frame paints the paper before any stroke", () => {
     keys: () => [stored.object.objectId][Symbol.iterator](),
     observe: () => () => undefined,
   } as unknown as LiveObjects;
-  const source: BoardSource = {
+  const source: DrawingSource = {
     view: () => undefined,
     commit: () => undefined,
     erase: () => undefined,

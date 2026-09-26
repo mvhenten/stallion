@@ -29,7 +29,7 @@ import {
   strokeFramePath,
   translateStroke,
 } from "./stroke";
-import type { BoardSource } from "./sync";
+import type { DrawingSource } from "./sync";
 
 export type ToolMode = "Pencil" | "Pan" | "Eraser" | "Select";
 
@@ -114,7 +114,7 @@ export type Surface = { zoomToLevel(level: number): void; dispose(): void };
 export function createSurface(
   canvas: HTMLCanvasElement,
   boardId: string,
-  source: BoardSource,
+  source: DrawingSource,
   currentTool: () => Tool,
   onView: (view: SurfaceView) => void = () => undefined,
 ): Surface {
@@ -540,6 +540,7 @@ export function createSurface(
   const onPointerMove = (event: PointerEvent) => shareCursor(localPoint(event));
 
   const onKey = (event: KeyboardEvent) => {
+    if (event.target instanceof HTMLInputElement) return;
     if (event.type === "keydown" && (event.key === "Delete" || event.key === "Backspace")) {
       if (selected === undefined || currentTool().mode !== "Select") return;
       event.preventDefault();

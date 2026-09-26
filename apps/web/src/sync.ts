@@ -1,20 +1,25 @@
 import type { StoredObject } from "@stallion/client-store";
 import type {
+  BoardLock,
   BoardOptions,
   BoardStatus,
   History,
   LiveObjects,
+  PinResult,
+  PinState,
+  SetPinResult,
   StallionBoard,
 } from "@stallion/client-sync";
 import type { BBox } from "@stallion/geometry";
 import { errorMessage } from "./report";
 
-export type Connection = "Connected" | "Reconnecting" | "Offline" | "LocalOnly";
+export type Connection = "Connected" | "Reconnecting" | "Offline" | "Locked" | "LocalOnly";
 
 export const CONNECTION_LABEL: Record<Connection, string> = {
   Connected: "Connected",
   Reconnecting: "Reconnecting",
   Offline: "Offline",
+  Locked: "Locked: enter the board PIN to join",
   LocalOnly: "Local only: strokes stay in this browser",
 };
 
@@ -22,7 +27,7 @@ export const VIEW_DEBOUNCE_MS = 100;
 
 export type Awareness = StallionBoard["awareness"];
 
-export type BoardSource = {
+export type DrawingSource = {
   view(viewport: BBox, zoom: number): void;
   commit(stored: StoredObject): void;
   erase(objectId: string): void;
@@ -30,6 +35,13 @@ export type BoardSource = {
   readonly history: History;
   readonly awareness: Awareness | undefined;
   close(): Promise<void>;
+};
+
+export type BoardSource = DrawingSource & {
+  readonly lock: BoardLock | undefined;
+  join(pin: string): Promise<PinResult>;
+  setPin(pin: string): Promise<SetPinResult>;
+  pinState(): Promise<PinState>;
 };
 
 export type OpenBoard = (url: string, boardId: string, options?: BoardOptions) => StallionBoard;
@@ -44,6 +56,7 @@ export type SourceOptions = {
 
 export const connectionFor = (status: BoardStatus, online: boolean): Connection => {
   if (status === "Open") return "Connected";
+  if (status === "NeedsPin") return "Locked";
   if (!online) return "Offline";
   return status === "Closed" ? "Offline" : "Reconnecting";
 };
@@ -75,6 +88,12 @@ export function openLocalSource(options: SourceOptions): BoardSource {
     objects: board.objects,
     history: board.history,
     awareness: undefined,
+    get lock() {
+      return board.lock;
+    },
+    join: (pin) => board.join(pin),
+    setPin: (pin) => board.setPin(pin),
+    pinState: () => board.pinState(),
     close() {
       setView.cancel();
       return board.close();
@@ -98,6 +117,12 @@ export function openSyncSource(url: string, options: SourceOptions): BoardSource
     objects: board.objects,
     history: board.history,
     awareness: board.awareness,
+    get lock() {
+      return board.lock;
+    },
+    join: (pin) => board.join(pin),
+    setPin: (pin) => board.setPin(pin),
+    pinState: () => board.pinState(),
     close() {
       setView.cancel();
       return board.close();
