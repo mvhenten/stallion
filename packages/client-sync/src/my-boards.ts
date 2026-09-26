@@ -7,9 +7,10 @@ export type MyBoard = {
   name: string;
   lastOpened: number;
   thumbnail: string;
+  removedAt: number;
 };
 
-export type MyBoardPatch = Partial<Omit<MyBoard, "boardId">>;
+export type MyBoardPatch = Partial<Omit<MyBoard, "boardId" | "removedAt">>;
 
 export type MyBoardsResult<T> = { ok: true; value: T } | ({ ok: false } & Refusal);
 
@@ -21,12 +22,13 @@ export type MyBoards = {
 
 export const isMyBoard = (value: unknown): value is MyBoard => {
   if (typeof value !== "object" || value === null) return false;
-  const { boardId, name, lastOpened, thumbnail } = value as Record<string, unknown>;
+  const { boardId, name, lastOpened, thumbnail, removedAt } = value as Record<string, unknown>;
   return (
     typeof boardId === "string" &&
     typeof name === "string" &&
     typeof lastOpened === "number" &&
-    typeof thumbnail === "string"
+    typeof thumbnail === "string" &&
+    typeof removedAt === "number"
   );
 };
 

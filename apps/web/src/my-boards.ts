@@ -30,6 +30,11 @@ export const mergeBoards = (
   const merged = new Map<string, RecentBoard>(local.map((recent) => [recent.id, recent]));
   for (const remote of server) {
     const mine = merged.get(remote.boardId);
+    const reopenedHere = mine !== undefined && mine.lastOpened > remote.removedAt;
+    if (remote.removedAt > 0 && !reopenedHere) {
+      merged.delete(remote.boardId);
+      continue;
+    }
     if (!mine) {
       merged.set(remote.boardId, {
         id: remote.boardId,
@@ -61,7 +66,9 @@ export const patchFor = (
 ): MyBoardPatch | undefined => {
   const patch: MyBoardPatch = {};
   if (!server || merged.name !== server.name) patch.name = merged.name;
-  if (!server || merged.lastOpened > server.lastOpened) patch.lastOpened = merged.lastOpened;
+  if (!server || server.removedAt > 0 || merged.lastOpened > server.lastOpened) {
+    patch.lastOpened = merged.lastOpened;
+  }
   if (merged.thumbnail !== (server?.thumbnail ?? "") && uploadable(merged.thumbnail)) {
     patch.thumbnail = merged.thumbnail;
   }

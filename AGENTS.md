@@ -124,12 +124,12 @@ A pass is `base64url(JSON {boardId, exp, generation}).base64url(HMAC-SHA256(BOAR
 
 ### My boards
 
-One `UserIndex` Durable Object per verified identity (the Access email, the service token common name, or `local` when Access is disabled) keeps that user's board list in its `my_board` table, capped at the 200 most recently opened.
+One `UserIndex` Durable Object per verified identity (the Access email, the service token common name, or `local` when Access is disabled) keeps that user's board list in its `my_board` table, capped at the 200 most recently opened. A removal is a tombstone: the row stays with `removed_at` set (Unix ms, 0 while listed) and its thumbnail cleared, so a device that still holds the board cannot merge it back. Tombstones older than 90 days are purged on the next request; they do not count against the cap.
 
 | Route | Body | Answers |
 | --- | --- | --- |
-| `GET /api/me/boards` | | `[{boardId, name, lastOpened, thumbnail}]`, newest `lastOpened` first |
-| `PUT /api/me/boards/{boardId}` | `{name?, lastOpened?, thumbnail?}` | The upserted row. `lastOpened` (Unix ms) never moves back; a new row defaults to now and its id as name. A thumbnail is a `data:image/png;base64,` URL of at most 24 KB: 413 `ThumbnailTooLarge`, 400 `ThumbnailNotPng`. |
-| `DELETE /api/me/boards/{boardId}` | | 204 |
+| `GET /api/me/boards` | | `[{boardId, name, lastOpened, thumbnail, removedAt}]`, newest `lastOpened` first; tombstones included with `removedAt` > 0 |
+| `PUT /api/me/boards/{boardId}` | `{name?, lastOpened?, thumbnail?}` | The upserted row. `lastOpened` (Unix ms) never moves back; a new row defaults to now and its id as name. On a tombstone, only a `lastOpened` newer than `removedAt` revives the row; anything else updates it and leaves it removed. A thumbnail is a `data:image/png;base64,` URL of at most 24 KB: 413 `ThumbnailTooLarge`, 400 `ThumbnailNotPng`. |
+| `DELETE /api/me/boards/{boardId}` | | 204; records a tombstone at the server's now, also for a board the list never held |
 
-`myBoards()` in `packages/client-sync` wraps the three routes. The landing page merges the server list with the device list on load (newest `lastOpened` per board; the server's name unless this device renamed it since the last sync) and writes the result back to both. Opening a board upserts `lastOpened`; its thumbnail uploads at most once per 10 s and when the board closes.
+`myBoards()` in `packages/client-sync` wraps the three routes. The landing page merges the server list with the device list on load (newest `lastOpened` per board; the server's name unless this device renamed it since the last sync) and writes the result back to both. A tombstone drops the device's entry unless this device opened the board after `removedAt`, in which case the merge pushes that `lastOpened` and the server revives the row. Opening a board upserts `lastOpened`; its thumbnail uploads at most once per 10 s and when the board closes.

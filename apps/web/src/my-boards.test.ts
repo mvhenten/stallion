@@ -17,6 +17,7 @@ const remote = (boardId: string, lastOpened: number, extra: Partial<MyBoard> = {
   name: boardId,
   lastOpened,
   thumbnail: "",
+  removedAt: 0,
   ...extra,
 });
 
@@ -50,6 +51,19 @@ describe("mergeBoards", () => {
     expect(merged.find((b) => b.id === "a")?.thumbnail).toBe("local-a");
     expect(merged.find((b) => b.id === "b")?.thumbnail).toBe("local-b");
   });
+
+  it("drops a board removed after this device last opened it", () => {
+    const merged = mergeBoards(
+      [local("a", 5), local("b", 1)],
+      [remote("a", 5, { removedAt: 6 }), remote("b", 1), remote("c", 2, { removedAt: 3 })],
+    );
+    expect(merged.map((b) => b.id)).toEqual(["b"]);
+  });
+
+  it("keeps a board this device opened again after the removal", () => {
+    const merged = mergeBoards([local("a", 9)], [remote("a", 5, { removedAt: 6 })]);
+    expect(merged.map((b) => [b.id, b.lastOpened])).toEqual([["a", 9]]);
+  });
 });
 
 describe("syncBoards", () => {
@@ -75,6 +89,17 @@ describe("syncBoards", () => {
     expect(synced).toMatchObject({ state: "Synced" });
     expect(synced.boards).toEqual([local("a", 4, { name: "renamed" })]);
     expect(puts).toEqual([["a", { name: "renamed" }]]);
+  });
+
+  it("prunes a removed board from the device list and revives one opened after the removal", async () => {
+    const tombstone = remote("a", 5, { removedAt: 6 });
+    const pruned = await syncBoards(fakeApi([tombstone]).api, [local("a", 5), local("b", 1)]);
+    expect(pruned.boards.map((b) => b.id)).toEqual(["b"]);
+
+    const { api, puts } = fakeApi([tombstone]);
+    const revived = await syncBoards(api, [local("a", 7)]);
+    expect(revived.boards.map((b) => b.id)).toEqual(["a"]);
+    expect(puts).toEqual([["a", { lastOpened: 7 }]]);
   });
 
   it("keeps the device list when the server cannot be reached", async () => {
