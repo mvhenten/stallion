@@ -31,28 +31,19 @@ export const pan = (camera: Camera, dx: number, dy: number): Camera => ({
   zoom: camera.zoom,
 });
 
-export const zoomAt = (camera: Camera, screen: Point, factor: number): Camera => {
+export const zoomTo = (camera: Camera, screen: Point, target: number): Camera => {
   const anchor = screenToWorld(camera, screen);
-  const zoom = clampZoom(camera.zoom * factor);
+  const zoom = clampZoom(target);
   return { x: anchor.x - screen.x / zoom, y: anchor.y - screen.y / zoom, zoom };
 };
 
-const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+export const zoomAt = (camera: Camera, screen: Point, factor: number): Camera =>
+  zoomTo(camera, screen, camera.zoom * factor);
 
-const distance = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.y - b.y);
+export type PinchStep = { anchor: Point; factor: number; dx: number; dy: number };
 
-export const pinch = (
-  camera: Camera,
-  from: readonly [Point, Point],
-  to: readonly [Point, Point],
-): Camera => {
-  const start = midpoint(...from);
-  const end = midpoint(...to);
-  const spread = distance(...from);
-  const next = distance(...to);
-  const factor = spread > 0 && next > 0 ? next / spread : 1;
-  return pan(zoomAt(camera, start, factor), end.x - start.x, end.y - start.y);
-};
+export const pinch = (camera: Camera, step: PinchStep): Camera =>
+  pan(zoomAt(camera, step.anchor, step.factor), step.dx, step.dy);
 
 export const wheelFactor = (deltaY: number, deltaMode: number): number => {
   const pixels = deltaMode === 1 ? deltaY * 16 : deltaMode === 2 ? deltaY * 800 : deltaY;

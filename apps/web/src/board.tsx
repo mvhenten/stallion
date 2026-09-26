@@ -1,11 +1,13 @@
 import { openBoard } from "@stallion/client-sync";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { errorMessage, reportLink } from "./report";
-import { createSurface, type Tool, type ToolMode } from "./surface";
+import { createSurface, type Surface, type SurfaceView, type Tool, type ToolMode } from "./surface";
 import { type BoardSource, type Connection, openSource, syncUrlFor } from "./sync";
 import { type HistoryState, Toolbar } from "./toolbar";
 
 const EMPTY_HISTORY: HistoryState = { canUndo: false, canRedo: false };
+
+const INITIAL_VIEW: SurfaceView = { level: 0, contentLevels: [] };
 
 const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return undefined;
@@ -33,7 +35,9 @@ export function Board({ boardId }: { boardId: string }) {
   const [error, setError] = useState<string | undefined>(undefined);
   const [connection, setConnection] = useState<Connection>("LocalOnly");
   const [history, setHistory] = useState<HistoryState>(EMPTY_HISTORY);
+  const [view, setView] = useState<SurfaceView>(INITIAL_VIEW);
   const sourceRef = useRef<BoardSource | undefined>(undefined);
+  const surfaceRef = useRef<Surface | undefined>(undefined);
   const toolRef = useRef(tool);
   toolRef.current = tool;
 
@@ -59,9 +63,10 @@ export function Board({ boardId }: { boardId: string }) {
       else source.history.redo();
     };
     window.addEventListener("keydown", onKey);
-    let surface: ReturnType<typeof createSurface> | undefined;
+    let surface: Surface | undefined;
     try {
-      surface = createSurface(canvas, boardId, source, () => toolRef.current);
+      surface = createSurface(canvas, boardId, source, () => toolRef.current, setView);
+      surfaceRef.current = surface;
     } catch (failure) {
       setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
     }
@@ -70,6 +75,7 @@ export function Board({ boardId }: { boardId: string }) {
       unobserve();
       sourceRef.current = undefined;
       setHistory(EMPTY_HISTORY);
+      surfaceRef.current = undefined;
       surface?.dispose();
       source
         .close()
@@ -93,6 +99,8 @@ export function Board({ boardId }: { boardId: string }) {
         history={history}
         onUndo={() => sourceRef.current?.history.undo()}
         onRedo={() => sourceRef.current?.history.redo()}
+        view={view}
+        onLevel={(level) => surfaceRef.current?.zoomToLevel(level)}
       />
       {error && (
         <div class="error" role="alert">
