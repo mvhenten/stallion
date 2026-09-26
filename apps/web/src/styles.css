@@ -714,3 +714,35 @@ body,
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+.landing-status,
+.landing-alert {
+  max-width: 640px;
+  margin: 0 auto 16px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  font:
+    14px / 1.4 system-ui,
+    sans-serif;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.landing-status {
+  border: 1px solid var(--line);
+  color: #60646c;
+}
+
+.landing-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #e5484d;
+  background: #fff5f5;
+  color: #8a1c1f;
+}
+
+.landing-alert p {
+  margin: 0;
+}

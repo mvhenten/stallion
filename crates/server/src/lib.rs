@@ -2,6 +2,7 @@ pub mod auth;
 pub mod board;
 pub mod frame;
 pub mod lock;
+pub mod me;
 pub mod object;
 pub mod pin;
 pub mod store;
@@ -17,12 +18,15 @@ use auth::{Access, AccessApp, Keys};
 use board::{BoardSync, Session};
 use frame::{Frame, FrameKind};
 use lock::{Lock, SqlLockStore};
+use me::{BoardPatch, SqlBoardIndex, UserBoards};
 use pin::PinHash;
 use serde::Deserialize;
 use serde_json::json;
 use store::SqlTileStore;
 
 const BOARD_BINDING: &str = "BOARD";
+const USER_INDEX_BINDING: &str = "USER_INDEX";
+const LOCAL_USER: &str = "local";
 const FLUSH_DELAY: Duration = Duration::from_secs(5);
 const IDLE_MS: u64 = 60_000;
 
@@ -109,12 +113,30 @@ fn board_route(path: &str) -> Option<(&str, Endpoint)> {
         "pin" => Endpoint::Pin,
         _ => return None,
     };
-    let valid = !id.is_empty()
+    valid_board_id(id).then_some((id, endpoint))
+}
+
+fn valid_board_id(id: &str) -> bool {
+    !id.is_empty()
         && id.len() <= 64
         && id
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-    valid.then_some((id, endpoint))
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MeRoute<'a> {
+    List,
+    One(&'a str),
+}
+
+fn me_route(path: &str) -> Option<MeRoute<'_>> {
+    let rest = path.strip_prefix("/api/me/boards")?;
+    if rest.is_empty() {
+        return Some(MeRoute::List);
+    }
+    let id = rest.strip_prefix('/')?;
+    valid_board_id(id).then_some(MeRoute::One(id))
 }
 
 fn refuse(status: u16, reason: &str, message: &str) -> Result<Response> {
@@ -137,8 +159,19 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         Caller::User(name) => name,
     };
     let url = req.url()?;
+    if me_route(url.path()).is_some() {
+        let owner = if user.is_empty() { LOCAL_USER } else { &user };
+        return env
+            .durable_object(USER_INDEX_BINDING)?
+            .get_by_name(owner)?
+            .fetch_with_request(req)
+            .await;
+    }
     let Some((id, _)) = board_route(url.path()) else {
-        return Response::error("expected /api/boards/{boardId}/ws, /join or /pin", 404);
+        return Response::error(
+            "expected /api/me/boards or /api/boards/{boardId}/ws, /join or /pin",
+            404,
+        );
     };
     let forward = req.clone_mut()?;
     let headers = forward.headers();
@@ -454,6 +487,54 @@ impl DurableObject for Board {
     }
 }
 
+#[durable_object]
+pub struct UserIndex {
+    boards: UserBoards<SqlBoardIndex>,
+}
+
+impl DurableObject for UserIndex {
+    fn new(state: State, _env: Env) -> Self {
+        UserIndex {
+            boards: UserBoards::new(SqlBoardIndex::new(state.storage().sql())),
+        }
+    }
+
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let url = req.url()?;
+        let Some(route) = me_route(url.path()) else {
+            return Response::error("expected /api/me/boards or /api/me/boards/{boardId}", 404);
+        };
+        match (route, req.method()) {
+            (MeRoute::List, Method::Get) => {
+                Response::from_json(&self.boards.list().map_err(Error::RustError)?)
+            }
+            (MeRoute::One(board_id), Method::Put) => {
+                let board_id = board_id.to_owned();
+                let Ok(patch) = req.json::<BoardPatch>().await else {
+                    return refuse(
+                        400,
+                        "InvalidBoard",
+                        "send {\"name\"?: string, \"lastOpened\"?: number, \"thumbnail\"?: string}",
+                    );
+                };
+                let upserted = self
+                    .boards
+                    .upsert(&board_id, patch, Date::now().as_millis())
+                    .map_err(Error::RustError)?;
+                match upserted {
+                    Ok(board) => Response::from_json(&board),
+                    Err(refusal) => refuse(refusal.status(), refusal.reason(), &refusal.message()),
+                }
+            }
+            (MeRoute::One(board_id), Method::Delete) => {
+                self.boards.remove(board_id).map_err(Error::RustError)?;
+                Ok(Response::empty()?.with_status(204))
+            }
+            _ => Response::error("method not allowed", 405),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +557,14 @@ mod tests {
         assert_eq!(board_route("/api/boards/a/b/ws"), None);
         assert_eq!(board_route("/api/boards/a/other"), None);
         assert_eq!(board_route("/"), None);
+    }
+
+    #[test]
+    fn routes_my_boards() {
+        assert_eq!(me_route("/api/me/boards"), Some(MeRoute::List));
+        assert_eq!(me_route("/api/me/boards/b-1"), Some(MeRoute::One("b-1")));
+        assert_eq!(me_route("/api/me/boards/a/b"), None);
+        assert_eq!(me_route("/api/me/boardsx"), None);
+        assert_eq!(me_route("/api/me/other"), None);
     }
 }

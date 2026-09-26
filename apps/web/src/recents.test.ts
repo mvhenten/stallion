@@ -26,12 +26,13 @@ const board = (id: string, lastOpened: number): RecentBoard => ({
   name: id,
   lastOpened,
   thumbnail: "",
+  renamedAt: 0,
 });
 
 describe("loadRecents", () => {
   it("seeds the default board on a device that has never stored recents", () => {
     expect(loadRecents(new FakeStorage())).toEqual([
-      { id: DEFAULT_BOARD, name: DEFAULT_BOARD, lastOpened: 0, thumbnail: "" },
+      { id: DEFAULT_BOARD, name: DEFAULT_BOARD, lastOpened: 0, thumbnail: "", renamedAt: 0 },
     ]);
   });
 
@@ -45,6 +46,15 @@ describe("loadRecents", () => {
     const storage = new FakeStorage();
     storage.setItem(RECENTS_KEY, JSON.stringify([{ id: "ok", name: "ok" }, "junk", 42]));
     expect(loadRecents(storage)).toEqual([]);
+  });
+
+  it("reads an entry stored before renames were tracked", () => {
+    const storage = new FakeStorage();
+    storage.setItem(
+      RECENTS_KEY,
+      JSON.stringify([{ id: "a", name: "a", lastOpened: 1, thumbnail: "" }]),
+    );
+    expect(loadRecents(storage)).toEqual([board("a", 1)]);
   });
 
   it("recovers from corrupt JSON", () => {
@@ -83,7 +93,7 @@ describe("upsertRecent", () => {
     expect(next[0]).toMatchObject({ id: "fresh-id", name: "fresh-id" });
   });
 
-  it("caps the list at 50, dropping the oldest", () => {
+  it("caps the list at MAX_RECENTS, dropping the oldest", () => {
     const recents = Array.from({ length: MAX_RECENTS }, (_, i) => board(`id-${i}`, i));
     const next = upsertRecent(recents, { id: "newest", lastOpened: MAX_RECENTS });
     expect(next).toHaveLength(MAX_RECENTS);

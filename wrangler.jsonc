@@ -16,7 +16,13 @@
     "ACCESS_AUD": ""
   },
   "durable_objects": {
-    "bindings": [{ "name": "BOARD", "class_name": "Board" }]
+    "bindings": [
+      { "name": "BOARD", "class_name": "Board" },
+      { "name": "USER_INDEX", "class_name": "UserIndex" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Board"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Board"] },
+    { "tag": "v2", "new_sqlite_classes": ["UserIndex"] }
+  ]
 }

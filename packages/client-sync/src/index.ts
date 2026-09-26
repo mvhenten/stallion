@@ -27,6 +27,16 @@ export {
   type LiveInk,
 } from "./ink";
 export {
+  isMyBoard,
+  MAX_THUMBNAIL_BYTES,
+  type MyBoard,
+  type MyBoardPatch,
+  type MyBoards,
+  type MyBoardsResult,
+  myBoards,
+  myBoardsEndpoint,
+} from "./my-boards";
+export {
   type BoardLock,
   type Fetch,
   type LockReason,
