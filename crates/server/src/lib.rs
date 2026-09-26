@@ -565,6 +565,26 @@ mod tests {
     }
 
     #[test]
+    fn accepts_new_and_old_board_ids() {
+        let new_id = "0a1b2c3d4e5f6g7h8i9j0k1l2";
+        assert!(valid_board_id(new_id));
+        assert!(valid_board_id("default"));
+        assert!(valid_board_id("Ab_-9xYz12QW"));
+        assert_eq!(
+            board_route(&format!("/api/boards/{new_id}/ws")),
+            Some((new_id, Endpoint::Socket))
+        );
+        assert_eq!(
+            me_route(&format!("/api/me/boards/{new_id}")),
+            Some(MeRoute::One(new_id))
+        );
+        assert!(!valid_board_id("default,"));
+        assert!(!valid_board_id(""));
+        assert!(!valid_board_id(&"a".repeat(65)));
+        assert_eq!(board_route("/api/boards/default,/ws"), None);
+    }
+
+    #[test]
     fn routes_my_boards() {
         assert_eq!(me_route("/api/me/boards"), Some(MeRoute::List));
         assert_eq!(me_route("/api/me/boards/b-1"), Some(MeRoute::One("b-1")));

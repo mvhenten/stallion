@@ -1,9 +1,10 @@
 import { openBoard } from "@stallion/client-sync";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { boardPath } from "./board-path";
 import { myBoardsForPage, thumbnailUploader } from "./my-boards";
 import { PinPrompt } from "./pin-prompt";
 import type { Presence } from "./presence";
-import { loadRecents, saveRecents, upsertRecent } from "./recents";
+import { loadRecents, renameRecent, saveRecents, upsertRecent } from "./recents";
 import { errorMessage, reportLink } from "./report";
 import { boardLink, SharePanel } from "./share";
 import { createSurface, type Surface, type SurfaceView, type Tool, type ToolMode } from "./surface";
@@ -18,6 +19,16 @@ const INITIAL_VIEW: SurfaceView = { level: 0, contentLevels: [] };
 const THUMBNAIL_DELAY_MS = 2000;
 
 const NO_PRESENCE: Presence = { peers: [], following: undefined };
+
+const storedName = (boardId: string): string =>
+  loadRecents(localStorage).find((recent) => recent.id === boardId)?.name ?? boardId;
+
+const clearRenamed = (boardId: string, renamedAt: number): void => {
+  const recents = loadRecents(localStorage).map((recent) =>
+    recent.id === boardId && recent.renamedAt === renamedAt ? { ...recent, renamedAt: 0 } : recent,
+  );
+  saveRecents(localStorage, recents);
+};
 
 const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return undefined;
@@ -48,6 +59,7 @@ export function Board({ boardId }: { boardId: string }) {
   const [view, setView] = useState<SurfaceView>(INITIAL_VIEW);
   const [shareOpen, setShareOpen] = useState(false);
   const [presence, setPresence] = useState<Presence>(NO_PRESENCE);
+  const [name, setName] = useState(() => storedName(boardId));
   const sourceRef = useRef<BoardSource | undefined>(undefined);
   const surfaceRef = useRef<Surface | undefined>(undefined);
   const toolRef = useRef(tool);
@@ -63,7 +75,21 @@ export function Board({ boardId }: { boardId: string }) {
       upsertRecent(loadRecents(localStorage), { id: boardId, lastOpened: openedAt }),
     );
     const api = myBoardsForPage();
-    void api?.upsert(boardId, { lastOpened: openedAt });
+    let live = true;
+    void api?.upsert(boardId, { lastOpened: openedAt }).then((result) => {
+      if (!live || !result.ok) return;
+      const local = loadRecents(localStorage).find((recent) => recent.id === boardId);
+      if (local?.renamedAt !== 0 || local.name === result.value.name) return;
+      saveRecents(
+        localStorage,
+        upsertRecent(loadRecents(localStorage), {
+          id: boardId,
+          name: result.value.name,
+          lastOpened: local.lastOpened,
+        }),
+      );
+      setName(result.value.name);
+    });
     const uploads = thumbnailUploader((thumbnail) => {
       void api?.upsert(boardId, { thumbnail });
     });
@@ -118,6 +144,7 @@ export function Board({ boardId }: { boardId: string }) {
       setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
     }
     return () => {
+      live = false;
       if (thumbnailTimer !== undefined) {
         clearTimeout(thumbnailTimer);
         saveThumbnail();
@@ -137,6 +164,31 @@ export function Board({ boardId }: { boardId: string }) {
         );
     };
   }, [boardId]);
+
+  useEffect(() => {
+    const path = boardPath(boardId, name);
+    if (window.location.pathname === path) return;
+    const { search, hash } = window.location;
+    window.history.replaceState(window.history.state, "", `${path}${search}${hash}`);
+  }, [boardId, name]);
+
+  const rename = useCallback(
+    (next: string) => {
+      const renamedAt = Date.now();
+      saveRecents(localStorage, renameRecent(loadRecents(localStorage), boardId, next, renamedAt));
+      setName(next);
+      myBoardsForPage()
+        ?.upsert(boardId, { name: next })
+        .then((result) => {
+          if (!result.ok) {
+            setError(`Could not save the board name: ${result.message}`);
+            return;
+          }
+          clearRenamed(boardId, renamedAt);
+        });
+    },
+    [boardId],
+  );
 
   return (
     <main class="board">
@@ -161,7 +213,9 @@ export function Board({ boardId }: { boardId: string }) {
       />
       {shareOpen && (
         <SharePanel
-          link={boardLink(window.location.origin, boardId)}
+          link={boardLink(window.location.origin, boardId, name)}
+          name={name}
+          onRename={rename}
           source={sourceRef.current}
           onClose={closeShare}
         />

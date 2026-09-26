@@ -1,5 +1,3 @@
-export const DEFAULT_BOARD = "default";
-
 export type RecentBoard = {
   id: string;
   name: string;
@@ -33,13 +31,9 @@ const fromStored = (stored: StoredRecent): RecentBoard => ({
   renamedAt: stored.renamedAt ?? 0,
 });
 
-const seedDefault = (): RecentBoard[] => [
-  { id: DEFAULT_BOARD, name: DEFAULT_BOARD, lastOpened: 0, thumbnail: "", renamedAt: 0 },
-];
-
 export const loadRecents = (storage: RecentsStorage): RecentBoard[] => {
   const raw = storage.getItem(RECENTS_KEY);
-  if (raw === null) return seedDefault();
+  if (raw === null) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter(isStoredRecent).map(fromStored) : [];

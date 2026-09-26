@@ -1,6 +1,7 @@
 import type { MyBoards } from "@stallion/client-sync";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { useLocation } from "wouter-preact";
+import { boardPath } from "./board-path";
 import { randomBoardId } from "./id";
 import { myBoardsForPage, syncBoards } from "./my-boards";
 import { loadRecents, type RecentBoard, removeRecent, renameRecent, saveRecents } from "./recents";
@@ -160,7 +161,7 @@ export function Landing() {
               <button
                 type="button"
                 class="recent-open"
-                onClick={() => navigate(`/b/${recent.id}`)}
+                onClick={() => navigate(boardPath(recent.id, recent.name))}
                 aria-label={`Open board ${recent.name}`}
               >
                 {recent.thumbnail ? (
