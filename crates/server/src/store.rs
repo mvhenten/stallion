@@ -159,6 +159,10 @@ pub fn run(sql: &SqlStorage, query: &str, bindings: Vec<SqlStorageValue>) -> Res
 }
 
 pub fn migrate(sql: &SqlStorage) -> Result<(), String> {
+    migrate_with(sql, MIGRATIONS)
+}
+
+pub fn migrate_with(sql: &SqlStorage, migrations: &[&[&str]]) -> Result<(), String> {
     run(
         sql,
         "CREATE TABLE IF NOT EXISTS schema_migration (version INTEGER PRIMARY KEY)",
@@ -178,7 +182,7 @@ pub fn migrate(sql: &SqlStorage) -> Result<(), String> {
         Some([SqlStorageValue::Integer(v)]) => usize::try_from(*v).unwrap_or(0),
         _ => 0,
     };
-    for (index, steps) in MIGRATIONS.iter().enumerate().skip(applied) {
+    for (index, steps) in migrations.iter().enumerate().skip(applied) {
         for step in *steps {
             run(sql, step, vec![])?;
         }

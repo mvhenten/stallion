@@ -1,5 +1,6 @@
 import { openBoard } from "@stallion/client-sync";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { myBoardsForPage, thumbnailUploader } from "./my-boards";
 import { PinPrompt } from "./pin-prompt";
 import type { Presence } from "./presence";
 import { loadRecents, saveRecents, upsertRecent } from "./recents";
@@ -56,7 +57,16 @@ export function Board({ boardId }: { boardId: string }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    saveRecents(localStorage, upsertRecent(loadRecents(localStorage), { id: boardId }));
+    const openedAt = Date.now();
+    saveRecents(
+      localStorage,
+      upsertRecent(loadRecents(localStorage), { id: boardId, lastOpened: openedAt }),
+    );
+    const api = myBoardsForPage();
+    void api?.upsert(boardId, { lastOpened: openedAt });
+    const uploads = thumbnailUploader((thumbnail) => {
+      void api?.upsert(boardId, { thumbnail });
+    });
     const source = openSource({
       url: syncUrlFor(import.meta.env.VITE_SYNC_URL, window.location),
       boardId,
@@ -78,16 +88,19 @@ export function Board({ boardId }: { boardId: string }) {
     };
     window.addEventListener("keydown", onKey);
     let thumbnailTimer: ReturnType<typeof setTimeout> | undefined;
+    const saveThumbnail = () => {
+      thumbnailTimer = undefined;
+      const thumbnail = captureThumbnail(canvas);
+      if (!thumbnail) return;
+      saveRecents(
+        localStorage,
+        upsertRecent(loadRecents(localStorage), { id: boardId, thumbnail }),
+      );
+      uploads.push(thumbnail);
+    };
     const scheduleThumbnail = () => {
       clearTimeout(thumbnailTimer);
-      thumbnailTimer = setTimeout(() => {
-        const thumbnail = captureThumbnail(canvas);
-        if (!thumbnail) return;
-        saveRecents(
-          localStorage,
-          upsertRecent(loadRecents(localStorage), { id: boardId, thumbnail }),
-        );
-      }, THUMBNAIL_DELAY_MS);
+      thumbnailTimer = setTimeout(saveThumbnail, THUMBNAIL_DELAY_MS);
     };
     let surface: Surface | undefined;
     try {
@@ -105,7 +118,11 @@ export function Board({ boardId }: { boardId: string }) {
       setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
     }
     return () => {
-      clearTimeout(thumbnailTimer);
+      if (thumbnailTimer !== undefined) {
+        clearTimeout(thumbnailTimer);
+        saveThumbnail();
+      }
+      uploads.flush();
       window.removeEventListener("keydown", onKey);
       unobserve();
       sourceRef.current = undefined;

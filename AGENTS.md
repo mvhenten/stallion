@@ -121,3 +121,15 @@ A board is open to anyone with its link until a PIN is set. The PIN is 6 digits,
 | `GET /api/boards/{boardId}/pin` | | `{pinSet}` |
 
 A pass is `base64url(JSON {boardId, exp, generation}).base64url(HMAC-SHA256(BOARD_PASS_SECRET, first part))`. `exp` is Unix seconds, 30 days after issue. A pass is valid for its board until it expires or the PIN changes. The client keeps it in `localStorage` under `stallion:pass:<boardId>`, sends it as `?pass=` on the socket, and drops it on `PassInvalid`. After a refused handshake `openBoard` probes the socket URL over HTTP; a 403 lock reason sets status `NeedsPin` and stops retrying until `join()` stores a pass and reconnects.
+
+### My boards
+
+One `UserIndex` Durable Object per verified identity (the Access email, the service token common name, or `local` when Access is disabled) keeps that user's board list in its `my_board` table, capped at the 200 most recently opened.
+
+| Route | Body | Answers |
+| --- | --- | --- |
+| `GET /api/me/boards` | | `[{boardId, name, lastOpened, thumbnail}]`, newest `lastOpened` first |
+| `PUT /api/me/boards/{boardId}` | `{name?, lastOpened?, thumbnail?}` | The upserted row. `lastOpened` (Unix ms) never moves back; a new row defaults to now and its id as name. A thumbnail is a `data:image/png;base64,` URL of at most 24 KB: 413 `ThumbnailTooLarge`, 400 `ThumbnailNotPng`. |
+| `DELETE /api/me/boards/{boardId}` | | 204 |
+
+`myBoards()` in `packages/client-sync` wraps the three routes. The landing page merges the server list with the device list on load (newest `lastOpened` per board; the server's name unless this device renamed it since the last sync) and writes the result back to both. Opening a board upserts `lastOpened`; its thumbnail uploads at most once per 10 s and when the board closes.
