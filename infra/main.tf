@@ -28,8 +28,14 @@ resource "cloudflare_zero_trust_organization" "this" {
   deny_unmatched_requests                     = false
   deny_unmatched_requests_exempted_zone_names = []
 
+  service_token_inactivity = {
+    enabled                   = false
+    action                    = "disable"
+    inactivity_threshold_days = 90
+  }
+
   lifecycle {
-    ignore_changes = [name, auth_domain, service_token_inactivity]
+    ignore_changes = [name, auth_domain]
   }
 }
 
@@ -58,6 +64,8 @@ resource "cloudflare_zero_trust_access_application" "stallion" {
   domain                    = var.app_domain
   session_duration          = "720h"
   auto_redirect_to_identity = true
+  enable_binding_cookie     = false
+  options_preflight_bypass  = false
   allowed_idps              = [cloudflare_zero_trust_access_identity_provider.otp.id]
   policies = [{
     id         = cloudflare_zero_trust_access_policy.owner.id
