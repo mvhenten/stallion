@@ -122,6 +122,12 @@ const syncPayload = (write: (encoder: encoding.Encoder) => void): Uint8Array => 
   return encoding.toUint8Array(encoder);
 };
 
+const BOARD_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+export const isBoardId = (boardId: string): boolean => BOARD_ID.test(boardId);
+
+export const HANDSHAKE_FAILURES_REPORTED = 3;
+
 const boardUrl = (url: string, boardId: string): string =>
   `${url.replace(/\/+$/, "")}/api/boards/${encodeURIComponent(boardId)}/ws`;
 
@@ -139,6 +145,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   let socket: ReturnType<Connect> | undefined;
   let status: BoardStatus = "Connecting";
   let attempt = 0;
+  let failedHandshakes = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
   let chain: Promise<void> = Promise.resolve();
   let undoSteps: Change[][] = [];
@@ -368,10 +375,14 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   function open(): void {
     retry = undefined;
     setStatus("Connecting");
-    const current = connect(boardUrl(url, boardId), {
+    const target = boardUrl(url, boardId);
+    let opened = false;
+    const current = connect(target, {
       open() {
         if (socket !== current) return;
+        opened = true;
         attempt = 0;
+        failedHandshakes = 0;
         setStatus("Open");
         sendView();
         if (awareness.getLocalState() !== null) {
@@ -388,6 +399,12 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
         for (const entry of entries.values()) entry.explicit = false;
         if (status === "Closed") return;
         setStatus("Offline");
+        if (!opened && ++failedHandshakes === HANDSHAKE_FAILURES_REPORTED) {
+          report(
+            BOARD_KEY,
+            `the server refused the board connection ${target} ${failedHandshakes} times in a row; still retrying`,
+          );
+        }
         scheduleReconnect();
       },
     });
@@ -645,7 +662,13 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   });
 
   if (options.localOnly) setStatus("Offline");
-  else open();
+  else if (!isBoardId(boardId)) {
+    setStatus("Closed");
+    report(
+      BOARD_KEY,
+      `board id "${boardId}" is not valid: use 1 to 64 letters, digits, "-" or "_"`,
+    );
+  } else open();
 
   return {
     setView,

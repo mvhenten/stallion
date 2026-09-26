@@ -2,7 +2,12 @@ import "fake-indexeddb/auto";
 import { type BBox, place, tileKey } from "@stallion/geometry";
 import { decodeMove, type Stroke } from "@stallion/schema";
 import { afterEach, expect, test } from "vitest";
-import { openBoard, type StallionBoard } from "./index";
+import {
+  type BoardError,
+  HANDSHAKE_FAILURES_REPORTED,
+  openBoard,
+  type StallionBoard,
+} from "./index";
 import { TestServer } from "./test-server";
 
 const VIEW = { minX: 0, minY: 0, maxX: 1024, maxY: 768 };
@@ -16,6 +21,7 @@ const open = (server: TestServer): StallionBoard => {
     connect: server.connect,
     cache: { name: `sync-test-${databases++}` },
     backoff: { initialMs: 5, maxMs: 20 },
+    onError: () => {},
   });
   board.setView(VIEW, 1);
   boards.push(board);
@@ -67,6 +73,42 @@ test("two clients converge on one tile and share awareness", async () => {
   await until(() => alice.objects.size === 2 && bob.objects.size === 2, "convergence");
   expect(server.objectIds(TILE)).toEqual(["alice", "bob"]);
   await until(() => bob.awareness.getStates().has(alice.awareness.clientID), "awareness");
+});
+
+test("a board id the server rejects reports an error instead of connecting", async () => {
+  const errors: BoardError[] = [];
+  const attempts: string[] = [];
+  const board = openBoard("wss://host", "default,", {
+    connect: (url, handlers) => {
+      attempts.push(url);
+      return new TestServer().connect(url, handlers);
+    },
+    cache: { name: `sync-test-${databases++}` },
+    onError: (error) => errors.push(error),
+  });
+  boards.push(board);
+  expect(attempts).toEqual([]);
+  expect(board.status).toBe("Closed");
+  expect(errors.map((error) => error.reason)).toEqual([
+    'board id "default," is not valid: use 1 to 64 letters, digits, "-" or "_"',
+  ]);
+});
+
+test("a server that keeps refusing the websocket handshake surfaces an error", async () => {
+  const server = new TestServer();
+  server.goOffline();
+  const errors: BoardError[] = [];
+  const board = openBoard("wss://host", "board", {
+    connect: server.connect,
+    cache: { name: `sync-test-${databases++}` },
+    backoff: { initialMs: 1, maxMs: 2 },
+    onError: (error) => errors.push(error),
+  });
+  boards.push(board);
+  await until(() => errors.length > 0, "the handshake failure report");
+  expect(errors[0]?.reason).toBe(
+    `the server refused the board connection wss://host/api/boards/board/ws ${HANDSHAKE_FAILURES_REPORTED} times in a row; still retrying`,
+  );
 });
 
 test("offline edits replay after reconnect", async () => {
