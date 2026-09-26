@@ -50,6 +50,8 @@ The repository needs two Actions secrets:
 - `CLOUDFLARE_API_TOKEN`: create it under My Profile, API Tokens, from the "Edit Cloudflare Workers" template. It must grant Workers Scripts edit and Account Workers Scripts read.
 - `CLOUDFLARE_ACCOUNT_ID`: the account ID from the Workers dashboard.
 
+The Worker needs one secret, `BOARD_PASS_SECRET`, the HMAC key for board passes. Set it once per Worker with `wrangler secret put BOARD_PASS_SECRET`, piping 32 random bytes as hex; it survives deploys. For `wrangler dev`, put it in a gitignored `.dev.vars`. Without it, open boards still sync, but setting a PIN or joining a locked board answers 500 `PassSecretMissing`.
+
 ## PWA
 
 `vite-plugin-pwa` builds the manifest and a Workbox service worker from `apps/web/pwa.config.ts`. The worker precaches the built shell and assets and serves `index.html` for navigations to `/` and `/b/*`; it has no runtime routes, so `/api/*` and the sync WebSocket always go to the network. `apps/web/public/_headers` sets `Cache-Control: no-cache` on `sw.js` and the manifest.
@@ -62,7 +64,7 @@ Both vars live in `wrangler.jsonc`. Set `ACCESS_TEAM_DOMAIN` to `<team>.cloudfla
 
 ## Wire protocol
 
-One Durable Object (`Board`) per board, reached at `GET /api/boards/{boardId}/ws` with a WebSocket upgrade. Sockets use the hibernation API; each socket's subscriptions and awareness client ids live in its attachment. Tile docs load lazily from SQLite (`Storage::sql()` in `worker` 0.8.6, `new_sqlite_classes`) on first use. The `tile` table holds each doc as one compacted yrs update and `object_index` holds each object's bbox as JSON `[minX,minY,maxX,maxY]`; the `schema_migration` table records applied migrations. An alarm flushes dirty tiles 5 s after the first change, then evicts tiles idle for 60 s.
+One Durable Object (`Board`) per board, reached at `GET /api/boards/{boardId}/ws` with a WebSocket upgrade. The same object serves the PIN routes below. Sockets use the hibernation API; each socket's subscriptions and awareness client ids live in its attachment. Tile docs load lazily from SQLite (`Storage::sql()` in `worker` 0.8.6, `new_sqlite_classes`) on first use. The `tile` table holds each doc as one compacted yrs update and `object_index` holds each object's bbox as JSON `[minX,minY,maxX,maxY]`; the `schema_migration` table records applied migrations. An alarm flushes dirty tiles 5 s after the first change, then evicts tiles idle for 60 s.
 
 Every message is one binary CBOR map `{tileKey, kind, payload}`. `payload` is a plain byte string (cbor-x `tagUint8Array: false`; the server also accepts tag 64). `encodeFrame` and `decodeFrame` in `packages/schema` are the client codec; `fixtures/frame.cbor.hex` pins the bytes for both sides.
 
@@ -85,3 +87,16 @@ Every message is one binary CBOR map `{tileKey, kind, payload}`. `payload` is a 
 - An object lives in exactly one tile. A move beats a concurrent edit that kept the object in the source tile, and the first of two concurrent moves wins: when an update brings an object into a tile while another tile, loaded or in `object_index`, still holds it, the server deletes the newcomer and sends that delete to every subscriber, the sender included.
 - On connect the server sends the board's awareness states; on close it broadcasts their removal.
 - A text frame or undecodable CBOR closes the socket with 1003 or 1007.
+
+### Board PIN
+
+A board is open to anyone with its link until a PIN is set. The PIN is 6 digits, stored in the `board_lock` table as `pbkdf2-sha256$<iterations>$<salt>$<hash>` (WebCrypto PBKDF2-SHA256, 100000 iterations, 16-byte salt, base64url) with a `generation` that grows on every change. Every refusal is JSON `{reason, message}`.
+
+| Route | Body | Answers |
+| --- | --- | --- |
+| `GET /api/boards/{boardId}/ws?pass=<pass>` | | On a locked board, 403 `PinRequired` without a pass or 403 `PassInvalid` with a bad one, before the upgrade check. A plain GET that passes the lock gets 426; the client uses that as its probe after a refused handshake. |
+| `POST /api/boards/{boardId}/join` | `{"pin": "123456"}` | 200 `{pinSet, pass, expiresAt}`; 403 `WrongPin`, 400 `InvalidPin`, 429 `RateLimited` with `Retry-After`. Five attempts a minute per client, keyed by the Access email, else `CF-Connecting-IP`, kept in `pin_attempt`. |
+| `POST /api/boards/{boardId}/pin` | `{"pin": "123456"}`, or `""` to remove | Allowed on an open board, or with a valid pass in `X-Stallion-Pass`. Setting answers `{pinSet: true, pass, expiresAt}` and closes every socket with 4003, so each reconnects through the lock; removing answers `{pinSet: false}`. |
+| `GET /api/boards/{boardId}/pin` | | `{pinSet}` |
+
+A pass is `base64url(JSON {boardId, exp, generation}).base64url(HMAC-SHA256(BOARD_PASS_SECRET, first part))`. `exp` is Unix seconds, 30 days after issue. A pass is valid for its board until it expires or the PIN changes. The client keeps it in `localStorage` under `stallion:pass:<boardId>`, sends it as `?pass=` on the socket, and drops it on `PassInvalid`. After a refused handshake `openBoard` probes the socket URL over HTTP; a 403 lock reason sets status `NeedsPin` and stops retrying until `join()` stores a pass and reconnects.

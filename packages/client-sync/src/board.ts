@@ -32,6 +32,22 @@ import {
 } from "y-protocols/awareness";
 import { readSyncMessage, writeUpdate } from "y-protocols/sync";
 import * as Y from "yjs";
+import {
+  type BoardLock,
+  boardEndpoint,
+  type Fetch,
+  isLockReason,
+  localPasses,
+  networkRefusal,
+  type PassStore,
+  type PinResult,
+  type PinState,
+  passOf,
+  pinSetOf,
+  readJson,
+  refusalOf,
+  type SetPinResult,
+} from "./pin";
 import { type Connect, connectWebSocket } from "./socket";
 
 export type { Connect, SocketHandlers, SyncSocket } from "./socket";
@@ -40,7 +56,7 @@ export type LiveObjects = ReadonlyMap<string, StoredObject> & {
   observe(listener: (changed: ReadonlySet<string>) => void): () => void;
 };
 
-export type BoardStatus = "Connecting" | "Open" | "Offline" | "Closed";
+export type BoardStatus = "Connecting" | "Open" | "Offline" | "NeedsPin" | "Closed";
 
 export type BoardError = { tileKey: string; reason: string };
 
@@ -49,6 +65,8 @@ export type BoardOptions = {
   connect?: Connect;
   cache?: TileCacheOptions;
   backoff?: { initialMs: number; maxMs: number };
+  fetch?: Fetch;
+  passes?: PassStore;
   onError?: (error: BoardError) => void;
   onStatus?: (status: BoardStatus) => void;
 };
@@ -70,6 +88,10 @@ export type StallionBoard = {
   readonly history: History;
   readonly awareness: Awareness;
   readonly status: BoardStatus;
+  readonly lock: BoardLock | undefined;
+  join(pin: string): Promise<PinResult>;
+  setPin(pin: string): Promise<SetPinResult>;
+  pinState(): Promise<PinState>;
   close(): Promise<void>;
 };
 
@@ -128,11 +150,10 @@ export const isBoardId = (boardId: string): boolean => BOARD_ID.test(boardId);
 
 export const HANDSHAKE_FAILURES_REPORTED = 3;
 
-const boardUrl = (url: string, boardId: string): string =>
-  `${url.replace(/\/+$/, "")}/api/boards/${encodeURIComponent(boardId)}/ws`;
-
 export function openBoard(url: string, boardId: string, options: BoardOptions = {}): StallionBoard {
   const connect = options.connect ?? connectWebSocket;
+  const fetchJson: Fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const passes = options.passes ?? localPasses;
   const backoff = options.backoff ?? { initialMs: 500, maxMs: 30_000 };
   const cacheReady = openTileCache(boardId, options.cache);
   const entries = new Map<string, TileEntry>();
@@ -144,6 +165,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   let view: View | undefined;
   let socket: ReturnType<Connect> | undefined;
   let status: BoardStatus = "Connecting";
+  let lock: BoardLock | undefined;
   let attempt = 0;
   let failedHandshakes = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -372,12 +394,116 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     retry = setTimeout(open, delay * (0.5 + Math.random() / 2));
   };
 
+  const withPass = (endpoint: string): string => {
+    const pass = passes.get(boardId);
+    return pass ? `${endpoint}?pass=${encodeURIComponent(pass)}` : endpoint;
+  };
+
+  const probeLock = async (): Promise<BoardLock | undefined> => {
+    const response = await fetchJson(withPass(boardEndpoint(url, boardId, "ws", "http")));
+    if (response.status !== 403) return undefined;
+    const refusal = refusalOf(response, await readJson(response));
+    return isLockReason(refusal.reason)
+      ? { reason: refusal.reason, message: refusal.message }
+      : undefined;
+  };
+
+  const lockOut = (next: BoardLock): void => {
+    if (next.reason === "PassInvalid") passes.remove(boardId);
+    lock = next;
+    setStatus("NeedsPin");
+  };
+
+  const reconnect = (): void => {
+    if (status === "Closed" || options.localOnly) return;
+    clearTimeout(retry);
+    const previous = socket;
+    socket = undefined;
+    previous?.close();
+    attempt = 0;
+    open();
+  };
+
+  const refused = (target: string): void => {
+    if (++failedHandshakes === HANDSHAKE_FAILURES_REPORTED) {
+      report(
+        BOARD_KEY,
+        `the server refused the board connection ${target} ${failedHandshakes} times in a row; still retrying`,
+      );
+    }
+    scheduleReconnect();
+  };
+
+  const post = async (endpoint: "join" | "pin", pin: string, pass?: string) => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (pass) headers["X-Stallion-Pass"] = pass;
+    const response = await fetchJson(boardEndpoint(url, boardId, endpoint, "http"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ pin }),
+    });
+    return { response, body: await readJson(response) };
+  };
+
+  const unavailable = (): { ok: false; reason: string; message: string } | undefined => {
+    if (options.localOnly) {
+      return {
+        ok: false,
+        reason: "LocalOnly",
+        message: "this board is not synced, so it has no PIN",
+      };
+    }
+    if (status === "Closed") return { ok: false, reason: "Closed", message: "the board is closed" };
+    return undefined;
+  };
+
+  const join = async (pin: string): Promise<PinResult> => {
+    const blocked = unavailable();
+    if (blocked) return blocked;
+    const result = await post("join", pin).catch((error: unknown) => ({ error }));
+    if ("error" in result) return { ok: false, ...networkRefusal(result.error) };
+    const pass = passOf(result.body);
+    if (!result.response.ok || !pass) {
+      return { ok: false, ...refusalOf(result.response, result.body) };
+    }
+    passes.set(boardId, pass);
+    lock = undefined;
+    reconnect();
+    return { ok: true };
+  };
+
+  const setPin = async (pin: string): Promise<SetPinResult> => {
+    const blocked = unavailable();
+    if (blocked) return blocked;
+    const result = await post("pin", pin, passes.get(boardId)).catch((error: unknown) => ({
+      error,
+    }));
+    if ("error" in result) return { ok: false, ...networkRefusal(result.error) };
+    if (!result.response.ok) return { ok: false, ...refusalOf(result.response, result.body) };
+    const pass = passOf(result.body);
+    if (pass) passes.set(boardId, pass);
+    if (status !== "Open") reconnect();
+    return { ok: true, pinSet: pinSetOf(result.body) };
+  };
+
+  const pinState = async (): Promise<PinState> => {
+    const blocked = unavailable();
+    if (blocked) return blocked;
+    const response = await fetchJson(boardEndpoint(url, boardId, "pin", "http")).catch(
+      (error: unknown) => ({ error }),
+    );
+    if ("error" in response) return { ok: false, ...networkRefusal(response.error) };
+    const body = await readJson(response);
+    if (!response.ok) return { ok: false, ...refusalOf(response, body) };
+    return { ok: true, pinSet: pinSetOf(body) };
+  };
+
   function open(): void {
     retry = undefined;
     setStatus("Connecting");
-    const target = boardUrl(url, boardId);
+    const target = boardEndpoint(url, boardId, "ws", "ws");
     let opened = false;
-    const current = connect(target, {
+    const current = connect(withPass(target), {
       open() {
         if (socket !== current) return;
         opened = true;
@@ -399,13 +525,17 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
         for (const entry of entries.values()) entry.explicit = false;
         if (status === "Closed") return;
         setStatus("Offline");
-        if (!opened && ++failedHandshakes === HANDSHAKE_FAILURES_REPORTED) {
-          report(
-            BOARD_KEY,
-            `the server refused the board connection ${target} ${failedHandshakes} times in a row; still retrying`,
-          );
+        if (opened) {
+          scheduleReconnect();
+          return;
         }
-        scheduleReconnect();
+        probeLock()
+          .catch(() => undefined)
+          .then((found) => {
+            if (socket !== undefined || retry !== undefined || status !== "Offline") return;
+            if (found) lockOut(found);
+            else refused(target);
+          });
       },
     });
     socket = current;
@@ -680,6 +810,12 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     get status() {
       return status;
     },
+    get lock() {
+      return lock;
+    },
+    join,
+    setPin,
+    pinState,
     close,
   };
 }

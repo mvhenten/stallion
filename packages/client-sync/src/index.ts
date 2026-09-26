@@ -12,3 +12,14 @@ export {
   type StallionBoard,
   type SyncSocket,
 } from "./board";
+export {
+  type BoardLock,
+  type Fetch,
+  type LockReason,
+  localPasses,
+  memoryPasses,
+  type PassStore,
+  type PinResult,
+  type PinState,
+  type SetPinResult,
+} from "./pin";

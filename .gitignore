@@ -5,3 +5,4 @@ crates/server/build/
 .wrangler/
 .tmp/
 .vite/
+.dev.vars

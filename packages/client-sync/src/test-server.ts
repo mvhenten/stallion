@@ -12,6 +12,7 @@ import * as decoding from "lib0/decoding";
 import * as encoding from "lib0/encoding";
 import { messageYjsSyncStep1, writeSyncStep1, writeSyncStep2, writeUpdate } from "y-protocols/sync";
 import * as Y from "yjs";
+import type { Fetch } from "./pin";
 import type { Connect, SocketHandlers } from "./socket";
 
 type Session = {
@@ -57,11 +58,44 @@ export class TestServer {
   readonly docs = new Map<string, Y.Doc>();
   readonly sessions = new Set<Session>();
   online = true;
+  pin: string | undefined;
+  readonly passes = new Set<string>();
+  joins = 0;
 
-  readonly connect: Connect = (_url, handlers) => {
+  private admitted(url: string): boolean {
+    if (this.pin === undefined) return true;
+    const pass = new URL(url).searchParams.get("pass");
+    return pass !== null && this.passes.has(pass);
+  }
+
+  readonly fetch: Fetch = async (input, init) => {
+    if (!this.online) throw new TypeError("fetch failed");
+    const { pathname } = new URL(input);
+    const json = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    if (pathname.endsWith("/ws")) {
+      if (this.admitted(input))
+        return new Response("expected a websocket upgrade", { status: 426 });
+      return json(403, { reason: "PinRequired", message: "this board is locked with a PIN" });
+    }
+    if (pathname.endsWith("/join") && init?.method === "POST") {
+      this.joins++;
+      const { pin } = JSON.parse(String(init.body));
+      if (pin !== this.pin) return json(403, { reason: "WrongPin", message: "wrong PIN" });
+      const pass = `pass-${this.passes.size + 1}`;
+      this.passes.add(pass);
+      return json(200, { pinSet: true, pass, expiresAt: 0 });
+    }
+    return new Response("not found", { status: 404 });
+  };
+
+  readonly connect: Connect = (url, handlers) => {
     const session: Session = { handlers, tiles: new Set(), view: undefined, received: [] };
     later(() => {
-      if (!this.online) {
+      if (!this.online || !this.admitted(url)) {
         handlers.close();
         return;
       }
