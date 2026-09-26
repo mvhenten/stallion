@@ -15,8 +15,6 @@ terraform {
 
 provider "cloudflare" {}
 
-data "cloudflare_user" "owner" {}
-
 import {
   to = cloudflare_zero_trust_organization.this
   id = var.account_id
@@ -46,14 +44,12 @@ resource "cloudflare_zero_trust_access_identity_provider" "otp" {
   config     = {}
 }
 
-resource "cloudflare_zero_trust_access_policy" "owner" {
+resource "cloudflare_zero_trust_access_policy" "anyone" {
   account_id = var.account_id
-  name       = "Allow the account owner"
+  name       = "anyone-with-email"
   decision   = "allow"
   include = [{
-    email = {
-      email = data.cloudflare_user.owner.email
-    }
+    everyone = {}
   }]
 }
 
@@ -85,7 +81,7 @@ resource "cloudflare_zero_trust_access_application" "stallion" {
   options_preflight_bypass  = false
   allowed_idps              = [cloudflare_zero_trust_access_identity_provider.otp.id]
   policies = [{
-    id         = cloudflare_zero_trust_access_policy.owner.id
+    id         = cloudflare_zero_trust_access_policy.anyone.id
     precedence = 1
     }, {
     id         = cloudflare_zero_trust_access_policy.automation.id

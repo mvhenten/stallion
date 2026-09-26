@@ -67,7 +67,9 @@ Both vars stay empty in `wrangler.jsonc`, so `wrangler dev` skips the check and 
 
 ## Infra
 
-OpenTofu in `infra/` manages Cloudflare Access with the `cloudflare/cloudflare` v5 provider: the Zero Trust organization (imported; its name and team domain stay as they are), a one-time PIN identity provider, a self-hosted Access application for the Worker hostname with a 720h session that redirects straight to that provider, an allow policy for the account owner's email from the `cloudflare_user` data source, and a second `non_identity` policy for the `stallion-automation` service token that the smoke and duo demo use. The token lasts 8760h; bump `client_secret_version` to rotate it. Nothing is changed in the dashboard.
+OpenTofu in `infra/` manages Cloudflare Access with the `cloudflare/cloudflare` v5 provider: the Zero Trust organization (imported; its name and team domain stay as they are), a one-time PIN identity provider, a self-hosted Access application for the Worker hostname with a 720h session that redirects straight to that provider, an `anyone-with-email` allow policy that includes `everyone`, and a second `non_identity` policy for the `stallion-automation` service token that the smoke and duo demo use. The token lasts 8760h; bump `client_secret_version` to rotate it. Nothing is changed in the dashboard.
+
+Anyone who can receive a one-time PIN at any email address can log in; no email address lives in the repo or the state. Board PINs are the real gate, so the default board should carry one.
 
 The `infra` job in `deploy.yml` runs before the Worker deploy. It plans on pull requests that touch `infra/`; on main it plans, applies and commits `infra/terraform.tfstate` back to main as `github-actions[bot]` with `[skip ci]`. The state is the only record of what exists; never delete or hand-edit it. The state holds the service token client secret in plain text and is committed to this private repo, so anyone who can read the repo can pass Access as the automation token. That is accepted for now.
 
