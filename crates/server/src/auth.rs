@@ -130,11 +130,13 @@ struct Claims {
     nbf: Option<u64>,
     #[serde(default)]
     email: String,
+    #[serde(default)]
+    common_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
-    pub email: String,
+    pub name: String,
 }
 
 pub fn verify(
@@ -177,9 +179,15 @@ pub fn verify(
     if claims.nbf.is_some_and(|nbf| nbf > now_secs) {
         return Err("not yet valid".into());
     }
-    Ok(Identity {
-        email: claims.email,
-    })
+    let name = if claims.email.is_empty() {
+        claims.common_name
+    } else {
+        claims.email
+    };
+    if name.is_empty() {
+        return Err("no email or common_name".into());
+    }
+    Ok(Identity { name })
 }
 
 #[cfg(test)]
@@ -240,7 +248,34 @@ mod tests {
     #[test]
     fn accepts_a_valid_token() {
         let identity = verify(&sign(claims("app-aud", NOW + 60)), &keys(), &app(), NOW).unwrap();
-        assert_eq!(identity.email, "user@example.com");
+        assert_eq!(identity.name, "user@example.com");
+    }
+
+    #[test]
+    fn accepts_a_service_token_by_its_common_name() {
+        let token = sign(json!({
+            "aud": ["app-aud"],
+            "iss": "https://team.cloudflareaccess.com",
+            "exp": NOW + 60,
+            "type": "app",
+            "sub": "",
+            "common_name": "client-id.access",
+        }));
+        let identity = verify(&token, &keys(), &app(), NOW).unwrap();
+        assert_eq!(identity.name, "client-id.access");
+    }
+
+    #[test]
+    fn rejects_a_token_without_a_name() {
+        let token = sign(json!({
+            "aud": ["app-aud"],
+            "iss": "https://team.cloudflareaccess.com",
+            "exp": NOW + 60,
+        }));
+        assert_eq!(
+            verify(&token, &keys(), &app(), NOW),
+            Err("no email or common_name".into())
+        );
     }
 
     #[test]

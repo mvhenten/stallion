@@ -25,7 +25,8 @@
     "serve:sync": "VITE_SYNC_URL=${VITE_SYNC_URL:-ws://100.104.44.51:8787} npm run build -w @stallion/web && wrangler dev --ip 0.0.0.0 --port 8787",
     "deploy:dry": "wrangler deploy --dry-run --outdir ~/development/.tmp/stallion-dry",
     "infra:plan": "node npm-scripts/infra.mjs plan",
-    "infra:apply": "node npm-scripts/infra.mjs apply"
+    "infra:apply": "node npm-scripts/infra.mjs apply",
+    "access:env": "node npm-scripts/access-env.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",

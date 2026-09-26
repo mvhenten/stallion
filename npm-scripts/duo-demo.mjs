@@ -5,6 +5,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { accessHeaders } from "./env.mjs";
 
 const ROOT = join(homedir(), "development", ".tmp", "stallion-duo");
 const VIEWPORT = { width: 1280, height: 800 };
@@ -191,7 +192,11 @@ const main = async () => {
   const browser = await launch(chromium);
   const failures = [];
   const artifacts = [];
-  const contextOptions = { viewport: VIEWPORT, recordVideo: { dir: raw, size: VIEWPORT } };
+  const contextOptions = {
+    viewport: VIEWPORT,
+    recordVideo: { dir: raw, size: VIEWPORT },
+    extraHTTPHeaders: accessHeaders(),
+  };
   const contextA = await browser.newContext(contextOptions);
   const contextB = await browser.newContext(contextOptions);
   const a = await contextA.newPage();

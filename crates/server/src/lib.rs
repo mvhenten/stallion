@@ -88,7 +88,7 @@ async fn caller(req: &Request, env: &Env) -> Result<Caller> {
     let keys = access_keys(&app).await?;
     Ok(
         match auth::verify(token, &keys, &app, Date::now().as_millis() / 1000) {
-            Ok(identity) => Caller::User(identity.email),
+            Ok(identity) => Caller::User(identity.name),
             Err(reason) => Caller::Denied(reason),
         },
     )
@@ -134,7 +134,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             return Response::error("unauthorized", 401);
         }
         Caller::Anonymous => String::new(),
-        Caller::User(email) => email,
+        Caller::User(name) => name,
     };
     let url = req.url()?;
     let Some((id, _)) = board_route(url.path()) else {
