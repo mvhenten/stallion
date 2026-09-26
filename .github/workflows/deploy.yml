@@ -106,3 +106,18 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy --var ACCESS_TEAM_DOMAIN:${{ needs.infra.outputs.team_domain }} --var ACCESS_AUD:${{ needs.infra.outputs.aud }}
+      - run: npx playwright install --with-deps chromium-headless-shell
+      - name: Smoke through Access
+        run: |
+          git fetch --depth=1 origin main
+          git show origin/main:infra/terraform.tfstate > "$RUNNER_TEMP/state.json"
+          output() {
+            node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).outputs[process.argv[2]].value)' "$RUNNER_TEMP/state.json" "$1"
+          }
+          CF_ACCESS_CLIENT_ID="$(output access_client_id)"
+          CF_ACCESS_CLIENT_SECRET="$(output access_client_secret)"
+          rm "$RUNNER_TEMP/state.json"
+          echo "::add-mask::$CF_ACCESS_CLIENT_ID"
+          echo "::add-mask::$CF_ACCESS_CLIENT_SECRET"
+          export CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+          npm run smoke -- "https://stallion.matthijs-f49.workers.dev/b/ci-${{ github.run_id }}"

@@ -1,10 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CF_ENV, readEnvFile } from "./env.mjs";
 
-const envFile = join(homedir(), ".config/stallion/cf-env");
 const infraDir = join(dirname(fileURLToPath(import.meta.url)), "..", "infra");
 const [command, ...args] = process.argv.slice(2);
 
@@ -13,21 +11,9 @@ if (command !== "plan" && command !== "apply") {
   process.exit(2);
 }
 
-const parseEnv = (text) =>
-  Object.fromEntries(
-    text
-      .split("\n")
-      .map((line) => line.replace(/^\s*export\s+/, "").trim())
-      .filter((line) => line && !line.startsWith("#") && line.includes("="))
-      .map((line) => {
-        const at = line.indexOf("=");
-        return [line.slice(0, at), line.slice(at + 1).replace(/^(["'])(.*)\1$/, "$2")];
-      }),
-  );
-
-const fileEnv = parseEnv(readFileSync(envFile, "utf8"));
+const fileEnv = readEnvFile(CF_ENV);
 if (!fileEnv.CLOUDFLARE_API_TOKEN) {
-  console.error(`${envFile} does not set CLOUDFLARE_API_TOKEN`);
+  console.error(`${CF_ENV} does not set CLOUDFLARE_API_TOKEN`);
   process.exit(1);
 }
 

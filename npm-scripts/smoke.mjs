@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { accessHeaders } from "./env.mjs";
 
 const DEFAULT_URL = "http://100.104.44.51:5173/b/default";
 const CHECKOUT = join(homedir(), "development", "stallion");
@@ -184,7 +185,11 @@ const waitForBoard = async (page) => {
 };
 
 const smokeScheme = async ({ browser, devices, analyser, url, scheme, dir }) => {
-  const context = await browser.newContext({ ...devices[DEVICE], colorScheme: scheme });
+  const context = await browser.newContext({
+    ...devices[DEVICE],
+    colorScheme: scheme,
+    extraHTTPHeaders: accessHeaders(),
+  });
   const page = await context.newPage();
   const problems = watchPage(page, url);
   const shot = async (name, clip) => {

@@ -57,6 +57,23 @@ resource "cloudflare_zero_trust_access_policy" "owner" {
   }]
 }
 
+resource "cloudflare_zero_trust_access_service_token" "automation" {
+  account_id = var.account_id
+  name       = "stallion-automation"
+  duration   = "8760h"
+}
+
+resource "cloudflare_zero_trust_access_policy" "automation" {
+  account_id = var.account_id
+  name       = "Allow the automation service token"
+  decision   = "non_identity"
+  include = [{
+    service_token = {
+      token_id = cloudflare_zero_trust_access_service_token.automation.id
+    }
+  }]
+}
+
 resource "cloudflare_zero_trust_access_application" "stallion" {
   account_id                = var.account_id
   name                      = "stallion"
@@ -70,5 +87,8 @@ resource "cloudflare_zero_trust_access_application" "stallion" {
   policies = [{
     id         = cloudflare_zero_trust_access_policy.owner.id
     precedence = 1
+    }, {
+    id         = cloudflare_zero_trust_access_policy.automation.id
+    precedence = 2
   }]
 }

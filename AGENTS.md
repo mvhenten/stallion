@@ -22,6 +22,7 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 | `npm run build` / `build:worker` | Vite build of `apps/web` / wasm bundle in `crates/server/build` |
 | `npm run smoke -- [--pull] [url]` | One real page load on a touch tablet, light and dark: draw, reload, check the stroke |
 | `npm run demo:duo -- <url> [--board <id>]` | Two 1280x800 browsers on one board: A draws blue, B draws red on top; checks each sees the other's ink and both read Connected. Videos, a side-by-side `combined.mp4` and screenshots land in `~/development/.tmp/stallion-duo/<timestamp>/` |
+| `npm run access:env` | Write the Access service token from `tofu output` into `~/.config/stallion/access-env` (mode 600); prints nothing |
 | `npm run icons -w @stallion/web` | Regenerate the PWA icons in `apps/web/public/icons` with sharp |
 | `npm run serve:sync` | Build `apps/web` against the local worker and serve both with `wrangler dev` on port 8787 |
 
@@ -41,6 +42,8 @@ The deploy workflow builds without `VITE_SYNC_URL`, so the deployed app syncs wi
 
 After pushing to main, run `npm run smoke -- --pull` and paste its result in the final summary. It fast-forwards `~/development/stallion`, reinstalls, then loads the live dev server (default `http://100.104.44.51:5173/b/default`) headless on a Galaxy Tab S9 viewport in light and dark, draws one touch stroke, reloads and checks the stroke is stored and visible. Any console error or failed request fails it. Screenshots land in `~/development/.tmp/stallion-smoke/<timestamp>/`. A push is not done until the smoke passes.
 
+Against the deployed Worker, run `npm run access:env` once, then `npm run smoke -- https://stallion.matthijs-f49.workers.dev/b/<id>` or `npm run demo:duo -- https://stallion.matthijs-f49.workers.dev/`. Both scripts read `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` from the environment, else from `~/.config/stallion/access-env`, and send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret` on every request of every browser context. The deploy workflow runs the same smoke on `/b/ci-<run id>` after `wrangler deploy`, reading both values from the state outputs; a failing smoke fails the deploy.
+
 ## Deploy
 
 `.github/workflows/deploy.yml` runs `wrangler deploy` after `ci` passes on main, and on manual dispatch. `npm run deploy:dry` validates the bundle locally without deploying.
@@ -58,15 +61,15 @@ The Worker needs one secret, `BOARD_PASS_SECRET`, the HMAC key for board passes.
 
 ## Access
 
-Cloudflare Access guards the app. The Worker verifies the RS256 JWT from the `Cf-Access-Jwt-Assertion` header or the `CF_Authorization` cookie on every `/api/*` request: signature against the team keys at `https://<ACCESS_TEAM_DOMAIN>/cdn-cgi/access/certs` (cached for an hour per isolate), `aud` against `ACCESS_AUD`, `iss` and `exp`. Anything else gets a 401. The verified email reaches the `Board` in the `X-Stallion-User` header, and the server writes it into every awareness state from that socket as `user.name`.
+Cloudflare Access guards the app. The Worker verifies the RS256 JWT from the `Cf-Access-Jwt-Assertion` header or the `CF_Authorization` cookie on every `/api/*` request: signature against the team keys at `https://<ACCESS_TEAM_DOMAIN>/cdn-cgi/access/certs` (cached for an hour per isolate), `aud` against `ACCESS_AUD`, `iss` and `exp`. Anything else gets a 401. A service token JWT has no email; the Worker uses its `common_name` (the client id) instead, and rejects a token with neither. The verified name reaches the `Board` in the `X-Stallion-User` header, and the server writes it into every awareness state from that socket as `user.name`.
 
 Both vars stay empty in `wrangler.jsonc`, so `wrangler dev` skips the check and logs once that Access is disabled. The deploy workflow passes the OpenTofu outputs to `wrangler deploy --var`: `ACCESS_TEAM_DOMAIN` is `<team>.cloudflareaccess.com` and `ACCESS_AUD` is the application audience tag. Setting only one is an error.
 
 ## Infra
 
-OpenTofu in `infra/` manages Cloudflare Access with the `cloudflare/cloudflare` v5 provider: the Zero Trust organization (imported; its name and team domain stay as they are), a one-time PIN identity provider, a self-hosted Access application for the Worker hostname with a 720h session that redirects straight to that provider, and an allow policy for the account owner's email from the `cloudflare_user` data source. Nothing is changed in the dashboard.
+OpenTofu in `infra/` manages Cloudflare Access with the `cloudflare/cloudflare` v5 provider: the Zero Trust organization (imported; its name and team domain stay as they are), a one-time PIN identity provider, a self-hosted Access application for the Worker hostname with a 720h session that redirects straight to that provider, an allow policy for the account owner's email from the `cloudflare_user` data source, and a second `non_identity` policy for the `stallion-automation` service token that the smoke and duo demo use. The token lasts 8760h; bump `client_secret_version` to rotate it. Nothing is changed in the dashboard.
 
-The `infra` job in `deploy.yml` runs before the Worker deploy. It plans on pull requests that touch `infra/`; on main it plans, applies and commits `infra/terraform.tfstate` back to main as `github-actions[bot]` with `[skip ci]`. The state is the only record of what exists; never delete or hand-edit it.
+The `infra` job in `deploy.yml` runs before the Worker deploy. It plans on pull requests that touch `infra/`; on main it plans, applies and commits `infra/terraform.tfstate` back to main as `github-actions[bot]` with `[skip ci]`. The state is the only record of what exists; never delete or hand-edit it. The state holds the service token client secret in plain text and is committed to this private repo, so anyone who can read the repo can pass Access as the automation token. That is accepted for now.
 
 Locally, `npm run infra:plan` and `npm run infra:apply` run `tofu init` and the command in `infra/`, reading `CLOUDFLARE_API_TOKEN` from `~/.config/stallion/cf-env`. Apply from CI, not locally.
 
