@@ -77,6 +77,7 @@ The `CLOUDFLARE_API_TOKEN` secret needs these permissions, as the API token edit
 
 - Account, Access: Organizations, Identity Providers, and Groups, Edit
 - Account, Access: Apps and Policies, Edit
+- Account, Access: Service Tokens, Edit
 - Account, Workers Scripts, Edit
 - User, User Details, Read
 
