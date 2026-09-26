@@ -6,7 +6,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { accessHeaders } from "./env.mjs";
 
-const DEFAULT_URL = "http://100.104.44.51:5173/b/default";
+const DEV_ORIGIN = "http://100.104.44.51:5173";
+
+const randomBoardId = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  return value.toString(36).padStart(25, "0");
+};
 const CHECKOUT = join(homedir(), "development", "stallion");
 const SHOTS_ROOT = join(homedir(), "development", ".tmp", "stallion-smoke");
 const DEVICE = "Galaxy Tab S9";
@@ -37,7 +44,7 @@ const parseArgs = (argv) => {
   const flags = argv.filter((arg) => arg.startsWith("--"));
   const unknown = flags.filter((flag) => flag !== "--pull");
   if (unknown.length > 0) fail(`unknown flag ${unknown.join(", ")}; usage: smoke [--pull] [url]`);
-  const [url = DEFAULT_URL] = argv.filter((arg) => !arg.startsWith("--"));
+  const [url = `${DEV_ORIGIN}/b/${randomBoardId()}`] = argv.filter((arg) => !arg.startsWith("--"));
   return { url, pull: flags.includes("--pull") };
 };
 

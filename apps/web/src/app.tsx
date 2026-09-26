@@ -1,30 +1,12 @@
-import { Redirect, Route, Switch } from "wouter-preact";
+import { Redirect, useLocation } from "wouter-preact";
 import { Board } from "./board";
+import { boardIdFromPath } from "./board-path";
 import { Landing } from "./landing";
 
-export const decodeBoardId = (segment: string): string => {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-};
-
 export function App() {
-  return (
-    <Switch>
-      <Route path="/b/:boardId">
-        {(params) => {
-          const boardId = decodeBoardId(params.boardId);
-          return <Board key={boardId} boardId={boardId} />;
-        }}
-      </Route>
-      <Route path="/">
-        <Landing />
-      </Route>
-      <Route>
-        <Redirect to="/" replace />
-      </Route>
-    </Switch>
-  );
+  const [location] = useLocation();
+  const boardId = boardIdFromPath(location);
+  if (boardId !== undefined) return <Board key={boardId} boardId={boardId} />;
+  if (location === "/") return <Landing />;
+  return <Redirect to="/" replace />;
 }

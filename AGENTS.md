@@ -40,7 +40,7 @@ The deploy workflow builds without `VITE_SYNC_URL`, so the deployed app syncs wi
 
 ## Smoke
 
-After pushing to main, run `npm run smoke -- --pull` and paste its result in the final summary. It fast-forwards `~/development/stallion`, reinstalls, then loads the live dev server (default `http://100.104.44.51:5173/b/default`) headless on a Galaxy Tab S9 viewport in light and dark, draws one touch stroke, reloads and checks the stroke is stored and visible. Any console error or failed request fails it. Screenshots land in `~/development/.tmp/stallion-smoke/<timestamp>/`. A push is not done until the smoke passes.
+After pushing to main, run `npm run smoke -- --pull` and paste its result in the final summary. It fast-forwards `~/development/stallion`, reinstalls, then loads the live dev server (default `http://100.104.44.51:5173/b/<fresh id>`, a new board each run) headless on a Galaxy Tab S9 viewport in light and dark, draws one touch stroke, reloads and checks the stroke is stored and visible. Any console error or failed request fails it. Screenshots land in `~/development/.tmp/stallion-smoke/<timestamp>/`. A push is not done until the smoke passes.
 
 Against the deployed Worker, run `npm run access:env` once, then `npm run smoke -- https://stallion.matthijs-f49.workers.dev/b/<id>` or `npm run demo:duo -- https://stallion.matthijs-f49.workers.dev/`. Both scripts read `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` from the environment, else from `~/.config/stallion/access-env`, and send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret` on every request of every browser context. The deploy workflow runs the same smoke on `/b/ci-<run id>` after `wrangler deploy`, reading both values from the state outputs; a failing smoke fails the deploy.
 
@@ -57,7 +57,7 @@ The Worker needs one secret, `BOARD_PASS_SECRET`, the HMAC key for board passes.
 
 ## PWA
 
-`vite-plugin-pwa` builds the manifest and a Workbox service worker from `apps/web/pwa.config.ts`. The worker precaches the built shell and assets and serves `index.html` for navigations to `/` and `/b/*`; it has no runtime routes, so `/api/*` and the sync WebSocket always go to the network. `apps/web/public/_headers` sets `Cache-Control: no-cache` on `sw.js` and the manifest.
+`vite-plugin-pwa` builds the manifest and a Workbox service worker from `apps/web/pwa.config.ts`. The worker precaches the built shell and assets and serves `index.html` for navigations to `/` and `/b/*`, the slugged form included; it has no runtime routes, so `/api/*` and the sync WebSocket always go to the network. `apps/web/public/_headers` sets `Cache-Control: no-cache` on `sw.js` and the manifest.
 
 ## Access
 
@@ -69,7 +69,7 @@ Both vars stay empty in `wrangler.jsonc`, so `wrangler dev` skips the check and 
 
 OpenTofu in `infra/` manages Cloudflare Access with the `cloudflare/cloudflare` v5 provider: the Zero Trust organization (imported; its name and team domain stay as they are), a one-time PIN identity provider, a self-hosted Access application for the Worker hostname with a 720h session that redirects straight to that provider, an `anyone-with-email` allow policy that includes `everyone`, and a second `non_identity` policy for the `stallion-automation` service token that the smoke and duo demo use. The token lasts 8760h; bump `client_secret_version` to rotate it. Nothing is changed in the dashboard.
 
-Anyone who can receive a one-time PIN at any email address can log in; no email address lives in the repo or the state. Board PINs are the real gate, so the default board should carry one.
+Anyone who can receive a one-time PIN at any email address can log in; no email address lives in the repo or the state. Board PINs are the real gate.
 
 The `infra` job in `deploy.yml` runs before the Worker deploy. It plans on pull requests that touch `infra/`; on main it plans, applies and commits `infra/terraform.tfstate` back to main as `github-actions[bot]` with `[skip ci]`. The state is the only record of what exists; never delete or hand-edit it. The state holds the service token client secret in plain text and is committed to this private repo, so anyone who can read the repo can pass Access as the automation token. That is accepted for now.
 
@@ -82,6 +82,10 @@ The `CLOUDFLARE_API_TOKEN` secret needs these permissions, as the API token edit
 - Account, Access: Service Tokens, Edit
 - Account, Workers Scripts, Edit
 - User, User Details, Read
+
+## Board URLs
+
+A board id is 128 random bits from `crypto.getRandomValues`, base36 lower case, zero-padded to 25 characters (`randomBoardId()` in `apps/web/src/id.ts`). The client and server accept `[A-Za-z0-9_-]{1,64}`, so older ids such as `default` still open. The app routes `/b/:id` and `/b/:id/:slug` on the id alone; the slug is the board name lower-cased, runs of anything but ascii letters and digits turned into `-`, trimmed, at most 60 characters, and left off while the name is empty or still the id. On open and after a rename in the Share panel, `history.replaceState` rewrites the address to `/b/<id>/<slug>`. The Share link, its QR code and the landing rows carry the slug; the REST and WebSocket paths carry the id only.
 
 ## Wire protocol
 

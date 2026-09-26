@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import QRCode from "qrcode";
+import { boardPath } from "./board-path";
 import { errorMessage } from "./report";
 import type { BoardSource } from "./sync";
 
 export const PIN_PATTERN = /^\d{6}$/;
 
-export const boardLink = (origin: string, boardId: string): string =>
-  `${origin}/b/${encodeURIComponent(boardId)}`;
+export const boardLink = (origin: string, boardId: string, name: string): string =>
+  `${origin}${boardPath(boardId, name)}`;
 
 type PinSource = Pick<BoardSource, "pinState" | "setPin">;
 
 type ShareProps = {
   link: string;
+  name: string;
+  onRename: (name: string) => void;
   source: PinSource | undefined;
   onClose: () => void;
 };
@@ -36,7 +39,8 @@ export const copyText = async (text: string, input: HTMLInputElement | null): Pr
   return "Link selected: copy it from the field.";
 };
 
-export function SharePanel({ link, source, onClose }: ShareProps) {
+export function SharePanel({ link, name, onRename, source, onClose }: ShareProps) {
+  const [nameDraft, setNameDraft] = useState(name);
   const [qr, setQr] = useState<string | undefined>(undefined);
   const [qrError, setQrError] = useState<string | undefined>(undefined);
   const [pin, setPin] = useState<PinView>({ state: "Checking" });
@@ -117,6 +121,20 @@ export function SharePanel({ link, source, onClose }: ShareProps) {
   return (
     <div class="share" role="dialog" aria-label="Share this board" ref={rootRef}>
       <h2>Share this board</h2>
+      <input
+        class="field share-name"
+        type="text"
+        value={nameDraft}
+        aria-label="Board name"
+        placeholder="Board name"
+        onInput={(event) => setNameDraft(event.currentTarget.value)}
+        onBlur={() => {
+          if (nameDraft !== name) onRename(nameDraft);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+      />
       <div class="share-link">
         <input
           ref={linkRef}

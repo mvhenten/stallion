@@ -46,6 +46,7 @@ describe("pwa config", () => {
       allow.some((pattern) => pattern.test(path)) && !deny.some((pattern) => pattern.test(path));
     expect(fallsBack("/")).toBe(true);
     expect(fallsBack("/b/default")).toBe(true);
+    expect(fallsBack("/b/0a1b2c3d4e5f6g7h8i9j0k1l2/my-custom-board")).toBe(true);
     expect(fallsBack("/api/boards/default/ws")).toBe(false);
     expect(fallsBack("/sw.js")).toBe(false);
   });

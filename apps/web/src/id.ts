@@ -1,10 +1,10 @@
-export const ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+export const ID_LENGTH = 25;
 
-export const ID_LENGTH = 12;
+export const ID_BYTES = 16;
 
 export const randomBoardId = (): string => {
-  const bytes = crypto.getRandomValues(new Uint8Array(ID_LENGTH));
-  let id = "";
-  for (const byte of bytes) id += ID_ALPHABET[byte % ID_ALPHABET.length];
-  return id;
+  const bytes = crypto.getRandomValues(new Uint8Array(ID_BYTES));
+  let value = 0n;
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte);
+  return value.toString(36).padStart(ID_LENGTH, "0");
 };

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_BOARD,
   loadRecents,
   MAX_RECENTS,
   RECENTS_KEY,
@@ -30,10 +29,8 @@ const board = (id: string, lastOpened: number): RecentBoard => ({
 });
 
 describe("loadRecents", () => {
-  it("seeds the default board on a device that has never stored recents", () => {
-    expect(loadRecents(new FakeStorage())).toEqual([
-      { id: DEFAULT_BOARD, name: DEFAULT_BOARD, lastOpened: 0, thumbnail: "", renamedAt: 0 },
-    ]);
+  it("starts empty on a device that has never stored recents", () => {
+    expect(loadRecents(new FakeStorage())).toEqual([]);
   });
 
   it("returns an empty list once the key exists but every entry was removed", () => {
