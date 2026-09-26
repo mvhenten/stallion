@@ -22,6 +22,7 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 | `npm run build` / `build:worker` | Vite build of `apps/web` / wasm bundle in `crates/server/build` |
 | `npm run smoke -- [--pull] [url]` | One real page load on a touch tablet, light and dark: draw, reload, check the stroke |
 | `npm run demo:duo -- <url> [--board <id>]` | Two 1280x800 browsers on one board: A draws blue, B draws red on top; checks each sees the other's ink and both read Connected. Videos, a side-by-side `combined.mp4` and screenshots land in `~/development/.tmp/stallion-duo/<timestamp>/` |
+| `npm run icons -w @stallion/web` | Regenerate the PWA icons in `apps/web/public/icons` with sharp |
 | `npm run serve:sync` | Build `apps/web` against the local worker and serve both with `wrangler dev` on port 8787 |
 
 `wrangler.jsonc` runs the worker from `crates/server/build` and serves `apps/web/dist` as static assets.
@@ -48,6 +49,10 @@ The repository needs two Actions secrets:
 
 - `CLOUDFLARE_API_TOKEN`: create it under My Profile, API Tokens, from the "Edit Cloudflare Workers" template. It must grant Workers Scripts edit and Account Workers Scripts read.
 - `CLOUDFLARE_ACCOUNT_ID`: the account ID from the Workers dashboard.
+
+## PWA
+
+`vite-plugin-pwa` builds the manifest and a Workbox service worker from `apps/web/pwa.config.ts`. The worker precaches the built shell and assets and serves `index.html` for navigations to `/` and `/b/*`; it has no runtime routes, so `/api/*` and the sync WebSocket always go to the network. `apps/web/public/_headers` sets `Cache-Control: no-cache` on `sw.js` and the manifest.
 
 ## Access
 
