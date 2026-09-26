@@ -23,12 +23,13 @@ import {
 }
 
 resource "cloudflare_zero_trust_organization" "this" {
-  account_id                = var.account_id
-  auto_redirect_to_identity = true
-  session_duration          = "720h"
+  account_id                                  = var.account_id
+  auto_redirect_to_identity                   = true
+  deny_unmatched_requests                     = false
+  deny_unmatched_requests_exempted_zone_names = []
 
   lifecycle {
-    ignore_changes = [name, auth_domain]
+    ignore_changes = [name, auth_domain, service_token_inactivity]
   }
 }
 
