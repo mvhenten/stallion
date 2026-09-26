@@ -55,7 +55,7 @@ jobs:
       - if: github.event_name != 'pull_request'
         run: tofu apply -input=false -auto-approve tfplan
       - name: Commit state
-        if: github.event_name != 'pull_request'
+        if: always() && github.event_name != 'pull_request' && hashFiles('infra/terraform.tfstate') != ''
         run: |
           cp terraform.tfstate "$RUNNER_TEMP/terraform.tfstate"
           git config user.name "github-actions[bot]"
