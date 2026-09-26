@@ -13,6 +13,20 @@ export {
   type SyncSocket,
 } from "./board";
 export {
+  createInkPublisher,
+  createInkReader,
+  INK_FIELD,
+  INK_FULL_RESEND_MS,
+  INK_INTERVAL_MS,
+  INK_MAX_BYTES,
+  type InkClock,
+  type InkPublisher,
+  type InkReader,
+  type InkStroke,
+  type InkTarget,
+  type LiveInk,
+} from "./ink";
+export {
   type BoardLock,
   type Fetch,
   type LockReason,
