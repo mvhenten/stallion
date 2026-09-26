@@ -4,11 +4,6 @@ import {
 }
 
 import {
-  to = cloudflare_zero_trust_access_policy.owner
-  id = "${var.account_id}/9cbacc1e-0bc3-47de-9b22-3d37f79cacbc"
-}
-
-import {
   to = cloudflare_zero_trust_access_application.stallion
   id = "accounts/${var.account_id}/784b0e96-ef2a-4c94-9e0b-b254049ddf14"
 }
