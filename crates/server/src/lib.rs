@@ -505,9 +505,12 @@ impl DurableObject for UserIndex {
             return Response::error("expected /api/me/boards or /api/me/boards/{boardId}", 404);
         };
         match (route, req.method()) {
-            (MeRoute::List, Method::Get) => {
-                Response::from_json(&self.boards.list().map_err(Error::RustError)?)
-            }
+            (MeRoute::List, Method::Get) => Response::from_json(
+                &self
+                    .boards
+                    .list(Date::now().as_millis())
+                    .map_err(Error::RustError)?,
+            ),
             (MeRoute::One(board_id), Method::Put) => {
                 let board_id = board_id.to_owned();
                 let Ok(patch) = req.json::<BoardPatch>().await else {
@@ -527,7 +530,9 @@ impl DurableObject for UserIndex {
                 }
             }
             (MeRoute::One(board_id), Method::Delete) => {
-                self.boards.remove(board_id).map_err(Error::RustError)?;
+                self.boards
+                    .remove(board_id, Date::now().as_millis())
+                    .map_err(Error::RustError)?;
                 Ok(Response::empty()?.with_status(204))
             }
             _ => Response::error("method not allowed", 405),

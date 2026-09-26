@@ -9,13 +9,17 @@ pub const MAX_BOARDS: usize = 200;
 pub const MAX_THUMBNAIL_BYTES: usize = 24 * 1024;
 pub const MAX_NAME_CHARS: usize = 200;
 pub const PNG_DATA_URL: &str = "data:image/png;base64,";
+pub const TOMBSTONE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
-pub const MIGRATIONS: &[&[&str]] = &[&["CREATE TABLE my_board (
+pub const MIGRATIONS: &[&[&str]] = &[
+    &["CREATE TABLE my_board (
         board_id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         last_opened INTEGER NOT NULL,
         thumbnail TEXT NOT NULL
-    )"]];
+    )"],
+    &["ALTER TABLE my_board ADD COLUMN removed_at INTEGER NOT NULL DEFAULT 0"],
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +28,8 @@ pub struct MyBoard {
     pub name: String,
     pub last_opened: u64,
     pub thumbnail: String,
+    /// Unix ms of the removal; 0 while the board is listed.
+    pub removed_at: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -75,8 +81,9 @@ pub trait BoardIndexStore {
     fn put(&self, board: &MyBoard) -> Result<(), String>;
     fn delete(&self, board_id: &str) -> Result<(), String>;
     fn all(&self) -> Result<Vec<MyBoard>, String>;
-    /// Every row's id and last_opened, without the thumbnails.
+    /// Every listed row's id and last_opened, without the thumbnails or tombstones.
     fn ages(&self) -> Result<Vec<(String, u64)>, String>;
+    fn purge_removed_before(&self, cutoff_ms: u64) -> Result<(), String>;
 }
 
 fn check(patch: &BoardPatch) -> Result<(), Refusal> {
@@ -111,7 +118,13 @@ impl<S: BoardIndexStore> UserBoards<S> {
         UserBoards { store }
     }
 
-    pub fn list(&self) -> Result<Vec<MyBoard>, String> {
+    fn purge(&self, now_ms: u64) -> Result<(), String> {
+        self.store
+            .purge_removed_before(now_ms.saturating_sub(TOMBSTONE_MS))
+    }
+
+    pub fn list(&self, now_ms: u64) -> Result<Vec<MyBoard>, String> {
+        self.purge(now_ms)?;
         let mut boards = self.store.all()?;
         boards.sort_by(|a, b| {
             b.last_opened
@@ -130,12 +143,18 @@ impl<S: BoardIndexStore> UserBoards<S> {
         if let Err(refusal) = check(&patch) {
             return Ok(Err(refusal));
         }
+        self.purge(now_ms)?;
         let existing = self.store.get(board_id)?;
         let last_opened = match (&existing, patch.last_opened) {
             (Some(old), Some(given)) => old.last_opened.max(given),
             (Some(old), None) => old.last_opened,
             (None, Some(given)) => given,
             (None, None) => now_ms,
+        };
+        let removed_at = match (&existing, patch.last_opened) {
+            (Some(old), Some(given)) if given > old.removed_at => 0,
+            (Some(old), _) => old.removed_at,
+            (None, _) => 0,
         };
         let board = MyBoard {
             board_id: board_id.to_owned(),
@@ -148,6 +167,7 @@ impl<S: BoardIndexStore> UserBoards<S> {
                 .thumbnail
                 .or_else(|| existing.map(|old| old.thumbnail))
                 .unwrap_or_default(),
+            removed_at,
         };
         self.store.put(&board)?;
         let mut ages = self.store.ages()?;
@@ -158,8 +178,19 @@ impl<S: BoardIndexStore> UserBoards<S> {
         Ok(Ok(board))
     }
 
-    pub fn remove(&self, board_id: &str) -> Result<(), String> {
-        self.store.delete(board_id)
+    pub fn remove(&self, board_id: &str, now_ms: u64) -> Result<(), String> {
+        self.purge(now_ms)?;
+        let existing = self.store.get(board_id)?;
+        let tombstone = MyBoard {
+            board_id: board_id.to_owned(),
+            name: existing
+                .as_ref()
+                .map_or_else(|| board_id.to_owned(), |old| old.name.clone()),
+            last_opened: existing.as_ref().map_or(0, |old| old.last_opened),
+            thumbnail: String::new(),
+            removed_at: now_ms.max(existing.map_or(0, |old| old.removed_at)),
+        };
+        self.store.put(&tombstone)
     }
 }
 
@@ -179,11 +210,13 @@ fn board_of(row: &[SqlStorageValue]) -> Result<MyBoard, String> {
             SqlStorageValue::String(name),
             SqlStorageValue::Integer(last_opened),
             SqlStorageValue::String(thumbnail),
+            SqlStorageValue::Integer(removed_at),
         ] => Ok(MyBoard {
             board_id: board_id.clone(),
             name: name.clone(),
             last_opened: integer(*last_opened)?,
             thumbnail: thumbnail.clone(),
+            removed_at: integer(*removed_at)?,
         }),
         other => Err(format!("my_board returned a malformed row: {other:?}")),
     }
@@ -223,7 +256,7 @@ impl SqlBoardIndex {
 impl BoardIndexStore for SqlBoardIndex {
     fn get(&self, board_id: &str) -> Result<Option<MyBoard>, String> {
         self.rows(
-            "SELECT board_id, name, last_opened, thumbnail FROM my_board WHERE board_id = ?",
+            "SELECT board_id, name, last_opened, thumbnail, removed_at FROM my_board WHERE board_id = ?",
             vec![board_id.into()],
         )?
         .first()
@@ -234,17 +267,20 @@ impl BoardIndexStore for SqlBoardIndex {
     fn put(&self, board: &MyBoard) -> Result<(), String> {
         self.migrate()?;
         let last_opened = i64::try_from(board.last_opened).map_err(|e| e.to_string())?;
+        let removed_at = i64::try_from(board.removed_at).map_err(|e| e.to_string())?;
         run(
             &self.sql,
-            "INSERT INTO my_board (board_id, name, last_opened, thumbnail) VALUES (?, ?, ?, ?)
+            "INSERT INTO my_board (board_id, name, last_opened, thumbnail, removed_at)
+             VALUES (?, ?, ?, ?, ?)
              ON CONFLICT (board_id)
              DO UPDATE SET name = excluded.name, last_opened = excluded.last_opened,
-                           thumbnail = excluded.thumbnail",
+                           thumbnail = excluded.thumbnail, removed_at = excluded.removed_at",
             vec![
                 board.board_id.as_str().into(),
                 board.name.as_str().into(),
                 last_opened.into(),
                 board.thumbnail.as_str().into(),
+                removed_at.into(),
             ],
         )
     }
@@ -260,7 +296,7 @@ impl BoardIndexStore for SqlBoardIndex {
 
     fn all(&self) -> Result<Vec<MyBoard>, String> {
         self.rows(
-            "SELECT board_id, name, last_opened, thumbnail FROM my_board",
+            "SELECT board_id, name, last_opened, thumbnail, removed_at FROM my_board",
             vec![],
         )?
         .iter()
@@ -269,16 +305,29 @@ impl BoardIndexStore for SqlBoardIndex {
     }
 
     fn ages(&self) -> Result<Vec<(String, u64)>, String> {
-        self.rows("SELECT board_id, last_opened FROM my_board", vec![])?
-            .iter()
-            .map(|row| match row.as_slice() {
-                [
-                    SqlStorageValue::String(board_id),
-                    SqlStorageValue::Integer(last_opened),
-                ] => Ok((board_id.clone(), integer(*last_opened)?)),
-                other => Err(format!("my_board returned a malformed row: {other:?}")),
-            })
-            .collect()
+        self.rows(
+            "SELECT board_id, last_opened FROM my_board WHERE removed_at = 0",
+            vec![],
+        )?
+        .iter()
+        .map(|row| match row.as_slice() {
+            [
+                SqlStorageValue::String(board_id),
+                SqlStorageValue::Integer(last_opened),
+            ] => Ok((board_id.clone(), integer(*last_opened)?)),
+            other => Err(format!("my_board returned a malformed row: {other:?}")),
+        })
+        .collect()
+    }
+
+    fn purge_removed_before(&self, cutoff_ms: u64) -> Result<(), String> {
+        self.migrate()?;
+        let cutoff = i64::try_from(cutoff_ms).map_err(|e| e.to_string())?;
+        run(
+            &self.sql,
+            "DELETE FROM my_board WHERE removed_at > 0 AND removed_at < ?",
+            vec![cutoff.into()],
+        )
     }
 }
 
@@ -316,8 +365,15 @@ mod tests {
                 .rows
                 .borrow()
                 .values()
+                .filter(|b| b.removed_at == 0)
                 .map(|b| (b.board_id.clone(), b.last_opened))
                 .collect())
+        }
+        fn purge_removed_before(&self, cutoff_ms: u64) -> Result<(), String> {
+            self.rows
+                .borrow_mut()
+                .retain(|_, b| b.removed_at == 0 || b.removed_at >= cutoff_ms);
+            Ok(())
         }
     }
 
@@ -330,9 +386,10 @@ mod tests {
 
     fn ids(boards: &UserBoards<&MemoryIndex>) -> Vec<String> {
         boards
-            .list()
+            .list(0)
             .unwrap()
             .into_iter()
+            .filter(|b| b.removed_at == 0)
             .map(|b| b.board_id)
             .collect()
     }
@@ -379,6 +436,7 @@ mod tests {
                 name: "fresh".into(),
                 last_opened: 42,
                 thumbnail: String::new(),
+                removed_at: 0,
             }
         );
     }
@@ -425,6 +483,63 @@ mod tests {
                 .unwrap(),
             Err(Refusal::ThumbnailNotPng)
         );
-        assert_eq!(boards.list().unwrap()[0].thumbnail, fits);
+        assert_eq!(boards.list(0).unwrap()[0].thumbnail, fits);
+    }
+
+    #[test]
+    fn a_removal_outranks_older_opens_and_a_newer_open_revives() {
+        let memory = MemoryIndex::default();
+        let boards = UserBoards::new(&memory);
+        boards.upsert("a", opened(5), 0).unwrap().unwrap();
+        boards.remove("a", 10).unwrap();
+        assert_eq!(ids(&boards), Vec::<String>::new());
+        let listed = boards.list(10).unwrap();
+        assert_eq!(
+            (listed[0].board_id.as_str(), listed[0].removed_at),
+            ("a", 10)
+        );
+
+        let stale = boards.upsert("a", opened(8), 11).unwrap().unwrap();
+        assert_eq!(stale.removed_at, 10);
+        let renamed = BoardPatch {
+            name: Some("Sketchbook".into()),
+            ..BoardPatch::default()
+        };
+        assert_eq!(
+            boards.upsert("a", renamed, 12).unwrap().unwrap().removed_at,
+            10
+        );
+        assert_eq!(ids(&boards), Vec::<String>::new());
+
+        let revived = boards.upsert("a", opened(11), 13).unwrap().unwrap();
+        assert_eq!((revived.removed_at, revived.last_opened), (0, 11));
+        assert_eq!(ids(&boards), ["a"]);
+    }
+
+    #[test]
+    fn removing_an_unknown_board_still_leaves_a_tombstone() {
+        let memory = MemoryIndex::default();
+        let boards = UserBoards::new(&memory);
+        boards.remove("elsewhere", 7).unwrap();
+        let board = boards.upsert("elsewhere", opened(3), 8).unwrap().unwrap();
+        assert_eq!(board.removed_at, 7);
+    }
+
+    #[test]
+    fn purges_tombstones_older_than_ninety_days() {
+        let memory = MemoryIndex::default();
+        let boards = UserBoards::new(&memory);
+        boards.upsert("old", opened(1), 0).unwrap().unwrap();
+        boards.upsert("recent", opened(1), 0).unwrap().unwrap();
+        boards.upsert("live", opened(1), 0).unwrap().unwrap();
+        boards.remove("old", 100).unwrap();
+        boards.remove("recent", 200).unwrap();
+        let listed: Vec<String> = boards
+            .list(TOMBSTONE_MS + 150)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.board_id)
+            .collect();
+        assert_eq!(listed, ["live", "recent"]);
     }
 }
