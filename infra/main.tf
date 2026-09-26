@@ -88,12 +88,3 @@ resource "cloudflare_zero_trust_access_application" "stallion" {
     precedence = 2
   }]
 }
-
-resource "cloudflare_zero_trust_access_policy" "owner" {
-  account_id = var.account_id
-  name       = "retired"
-  decision   = "allow"
-  include = [{
-    everyone = {}
-  }]
-}
