@@ -10,13 +10,13 @@ const publicIcons = Object.keys(import.meta.glob("../public/icons/*.png")).map((
 describe("pwa config", () => {
   const manifest = pwaOptions.manifest || {};
 
-  it("declares an installable standalone app that opens the default board", () => {
+  it("declares an installable standalone app that opens the landing page", () => {
     expect(manifest).toMatchObject({
       name: "Stallion",
       short_name: "Stallion",
       display: "standalone",
       orientation: "any",
-      start_url: "/b/default",
+      start_url: "/",
     });
   });
 
@@ -44,6 +44,7 @@ describe("pwa config", () => {
     const deny = pwaOptions.workbox?.navigateFallbackDenylist ?? [];
     const fallsBack = (path: string) =>
       allow.some((pattern) => pattern.test(path)) && !deny.some((pattern) => pattern.test(path));
+    expect(fallsBack("/")).toBe(true);
     expect(fallsBack("/b/default")).toBe(true);
     expect(fallsBack("/api/boards/default/ws")).toBe(false);
     expect(fallsBack("/sw.js")).toBe(false);

@@ -1,7 +1,6 @@
 import { Redirect, Route, Switch } from "wouter-preact";
 import { Board } from "./board";
-
-export const DEFAULT_BOARD = "default";
+import { Landing } from "./landing";
 
 export const decodeBoardId = (segment: string): string => {
   try {
@@ -20,8 +19,11 @@ export function App() {
           return <Board key={boardId} boardId={boardId} />;
         }}
       </Route>
+      <Route path="/">
+        <Landing />
+      </Route>
       <Route>
-        <Redirect to={`/b/${DEFAULT_BOARD}`} replace />
+        <Redirect to="/" replace />
       </Route>
     </Switch>
   );

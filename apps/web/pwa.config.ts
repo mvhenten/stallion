@@ -11,7 +11,7 @@ export const pwaOptions: Partial<VitePWAOptions> = {
     name: "Stallion",
     short_name: "Stallion",
     description: "An infinite-zoom drawing board",
-    start_url: "/b/default",
+    start_url: "/",
     scope: "/",
     display: "standalone",
     orientation: "any",
