@@ -1,6 +1,13 @@
-import type { MyBoard, MyBoardPatch, MyBoards } from "@stallion/client-sync";
+import {
+  type MyBoard,
+  type MyBoardPatch,
+  type MyBoards,
+  myBoards,
+  type SocketHandlers,
+} from "@stallion/client-sync";
+import { Encoder } from "cbor-x";
 import { describe, expect, it } from "vitest";
-import { mergeBoards, syncBoards } from "./my-boards";
+import { followBoards, mergeBoards, syncBoards } from "./my-boards";
 import type { RecentBoard } from "./recents";
 
 const local = (id: string, lastOpened: number, extra: Partial<RecentBoard> = {}): RecentBoard => ({
@@ -79,6 +86,8 @@ describe("syncBoards", () => {
         return { ok: true, value: remote(boardId, 0) };
       },
       remove: async () => ({ ok: true, value: undefined }),
+      subscribe: () => () => {},
+      close: () => {},
     };
     return { api, puts };
   };
@@ -108,5 +117,61 @@ describe("syncBoards", () => {
     const synced = await syncBoards(api, boards);
     expect(synced).toMatchObject({ state: "Failed", reason: "NetworkError", boards });
     expect(puts).toEqual([]);
+  });
+});
+
+describe("followBoards", () => {
+  it("merges every pushed list into the device list and hands it to the listener", () => {
+    const sockets: { url: string; handlers: SocketHandlers; closed: boolean }[] = [];
+    const api = myBoards("wss://stallion.test", {
+      connect: (url, handlers) => {
+        const socket = { url, handlers, closed: false };
+        sockets.push(socket);
+        return {
+          send: () => {},
+          close: () => {
+            socket.closed = true;
+          },
+        };
+      },
+    });
+    let device = [local("a", 5, { name: "mine", renamedAt: 3 }), local("b", 1)];
+    const statuses: string[] = [];
+    const unfollow = followBoards(
+      api,
+      (merge) => {
+        device = merge(device);
+      },
+      { onStatus: (status) => statuses.push(status) },
+    );
+
+    const [socket] = sockets;
+    expect(socket?.url).toBe("wss://stallion.test/api/me/ws");
+    socket?.handlers.open();
+    const codec = new Encoder({ useRecords: false, mapsAsObjects: true });
+    const push = (rows: MyBoard[]) =>
+      socket?.handlers.message(codec.encode({ kind: "boards", rows, thumbnails: true }));
+
+    push([remote("a", 2, { name: "theirs" }), remote("c", 1_714_000_000_000, { name: "New" })]);
+    expect(device.map((b) => [b.id, b.name])).toEqual([
+      ["c", "New"],
+      ["a", "mine"],
+      ["b", "b"],
+    ]);
+
+    push([
+      remote("c", 1_714_000_000_000, { name: "Renamed", thumbnail: "data:image/png;base64,AA" }),
+    ]);
+    expect(device.find((b) => b.id === "c")).toMatchObject({
+      name: "Renamed",
+      thumbnail: "data:image/png;base64,AA",
+    });
+
+    push([remote("c", 1_714_000_000_000, { removedAt: 1_714_000_000_001 })]);
+    expect(device.map((b) => b.id)).toEqual(["a", "b"]);
+
+    unfollow();
+    expect(socket?.closed).toBe(true);
+    expect(statuses).toEqual(["Connecting", "Open"]);
   });
 });

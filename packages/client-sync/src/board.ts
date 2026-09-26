@@ -48,7 +48,13 @@ import {
   refusalOf,
   type SetPinResult,
 } from "./pin";
-import { type Connect, connectWebSocket } from "./socket";
+import {
+  type Backoff,
+  type Connect,
+  connectWebSocket,
+  DEFAULT_BACKOFF,
+  retryDelay,
+} from "./socket";
 
 export type { Connect, SocketHandlers, SyncSocket } from "./socket";
 
@@ -64,7 +70,7 @@ export type BoardOptions = {
   localOnly?: boolean;
   connect?: Connect;
   cache?: TileCacheOptions;
-  backoff?: { initialMs: number; maxMs: number };
+  backoff?: Backoff;
   fetch?: Fetch;
   passes?: PassStore;
   onError?: (error: BoardError) => void;
@@ -154,7 +160,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   const connect = options.connect ?? connectWebSocket;
   const fetchJson: Fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const passes = options.passes ?? localPasses;
-  const backoff = options.backoff ?? { initialMs: 500, maxMs: 30_000 };
+  const backoff = options.backoff ?? DEFAULT_BACKOFF;
   const cacheReady = openTileCache(boardId, options.cache);
   const entries = new Map<string, TileEntry>();
   const objectMap = new Map<string, StoredObject>();
@@ -389,9 +395,8 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   };
 
   const scheduleReconnect = (): void => {
-    const delay = Math.min(backoff.maxMs, backoff.initialMs * 2 ** attempt);
+    retry = setTimeout(open, retryDelay(backoff, attempt));
     attempt++;
-    retry = setTimeout(open, delay * (0.5 + Math.random() / 2));
   };
 
   const withPass = (endpoint: string): string => {
