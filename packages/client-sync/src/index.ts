@@ -32,9 +32,14 @@ export {
   type MyBoard,
   type MyBoardPatch,
   type MyBoards,
+  type MyBoardsListener,
+  type MyBoardsOptions,
   type MyBoardsResult,
+  type MyBoardsStatus,
   myBoards,
   myBoardsEndpoint,
+  myBoardsSocketEndpoint,
+  type SubscribeOptions,
 } from "./my-boards";
 export {
   type BoardLock,

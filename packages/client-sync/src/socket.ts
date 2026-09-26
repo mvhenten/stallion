@@ -25,3 +25,10 @@ export const connectWebSocket: Connect = (url, handlers) => {
   };
   return socket;
 };
+
+export type Backoff = { initialMs: number; maxMs: number };
+
+export const DEFAULT_BACKOFF: Backoff = { initialMs: 500, maxMs: 30_000 };
+
+export const retryDelay = (backoff: Backoff, attempt: number): number =>
+  Math.min(backoff.maxMs, backoff.initialMs * 2 ** attempt) * (0.5 + Math.random() / 2);

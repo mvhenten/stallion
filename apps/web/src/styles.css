@@ -578,6 +578,11 @@ body,
   margin: 0 auto 24px;
 }
 
+.landing-header .status {
+  flex: none;
+  margin-right: auto;
+}
+
 .landing-header h1 {
   margin: 0;
   font:

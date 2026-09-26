@@ -18,7 +18,7 @@ use auth::{Access, AccessApp, Keys};
 use board::{BoardSync, Session};
 use frame::{Frame, FrameKind};
 use lock::{Lock, SqlLockStore};
-use me::{BoardPatch, SqlBoardIndex, UserBoards};
+use me::{BoardPatch, Listener, SqlBoardIndex, UserBoards};
 use pin::PinHash;
 use serde::Deserialize;
 use serde_json::json;
@@ -126,11 +126,15 @@ fn valid_board_id(id: &str) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MeRoute<'a> {
+    Socket,
     List,
     One(&'a str),
 }
 
 fn me_route(path: &str) -> Option<MeRoute<'_>> {
+    if path == "/api/me/ws" {
+        return Some(MeRoute::Socket);
+    }
     let rest = path.strip_prefix("/api/me/boards")?;
     if rest.is_empty() {
         return Some(MeRoute::List);
@@ -169,7 +173,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
     let Some((id, _)) = board_route(url.path()) else {
         return Response::error(
-            "expected /api/me/boards or /api/boards/{boardId}/ws, /join or /pin",
+            "expected /api/me/ws, /api/me/boards or /api/boards/{boardId}/ws, /join or /pin",
             404,
         );
     };
@@ -487,24 +491,50 @@ impl DurableObject for Board {
     }
 }
 
+impl Listener for WebSocket {
+    fn deliver(&self, frame: &[u8]) {
+        if let Err(error) = self.send_with_bytes(frame) {
+            console_error!("could not push the board list to a socket: {error}");
+        }
+    }
+}
+
 #[durable_object]
 pub struct UserIndex {
+    state: State,
     boards: UserBoards<SqlBoardIndex>,
+}
+
+impl UserIndex {
+    fn upgrade(&self, req: &Request) -> Result<Response> {
+        if req.headers().get("Upgrade")?.as_deref() != Some("websocket") {
+            return Response::error("expected a websocket upgrade", 426);
+        }
+        let pair = WebSocketPair::new()?;
+        self.state.accept_web_socket(&pair.server);
+        self.boards
+            .push(std::slice::from_ref(&pair.server), Date::now().as_millis())
+            .map_err(Error::RustError)?;
+        Response::from_websocket(pair.client)
+    }
 }
 
 impl DurableObject for UserIndex {
     fn new(state: State, _env: Env) -> Self {
-        UserIndex {
-            boards: UserBoards::new(SqlBoardIndex::new(state.storage().sql())),
-        }
+        let boards = UserBoards::new(SqlBoardIndex::new(state.storage().sql()));
+        UserIndex { state, boards }
     }
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         let url = req.url()?;
         let Some(route) = me_route(url.path()) else {
-            return Response::error("expected /api/me/boards or /api/me/boards/{boardId}", 404);
+            return Response::error(
+                "expected /api/me/ws, /api/me/boards or /api/me/boards/{boardId}",
+                404,
+            );
         };
         match (route, req.method()) {
+            (MeRoute::Socket, _) => self.upgrade(&req),
             (MeRoute::List, Method::Get) => Response::from_json(
                 &self
                     .boards
@@ -522,7 +552,12 @@ impl DurableObject for UserIndex {
                 };
                 let upserted = self
                     .boards
-                    .upsert(&board_id, patch, Date::now().as_millis())
+                    .upsert_and_push(
+                        &board_id,
+                        patch,
+                        Date::now().as_millis(),
+                        &self.state.get_websockets(),
+                    )
                     .map_err(Error::RustError)?;
                 match upserted {
                     Ok(board) => Response::from_json(&board),
@@ -531,12 +566,41 @@ impl DurableObject for UserIndex {
             }
             (MeRoute::One(board_id), Method::Delete) => {
                 self.boards
-                    .remove(board_id, Date::now().as_millis())
+                    .remove_and_push(
+                        board_id,
+                        Date::now().as_millis(),
+                        &self.state.get_websockets(),
+                    )
                     .map_err(Error::RustError)?;
                 Ok(Response::empty()?.with_status(204))
             }
             _ => Response::error("method not allowed", 405),
         }
+    }
+
+    async fn websocket_message(
+        &self,
+        ws: WebSocket,
+        message: WebSocketIncomingMessage,
+    ) -> Result<()> {
+        if let WebSocketIncomingMessage::String(_) = message {
+            return ws.close(Some(1003), Some("the board list socket takes no messages"));
+        }
+        Ok(())
+    }
+
+    async fn websocket_close(
+        &self,
+        _ws: WebSocket,
+        _code: usize,
+        _reason: String,
+        _was_clean: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn websocket_error(&self, _ws: WebSocket, _error: Error) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -586,6 +650,7 @@ mod tests {
 
     #[test]
     fn routes_my_boards() {
+        assert_eq!(me_route("/api/me/ws"), Some(MeRoute::Socket));
         assert_eq!(me_route("/api/me/boards"), Some(MeRoute::List));
         assert_eq!(me_route("/api/me/boards/b-1"), Some(MeRoute::One("b-1")));
         assert_eq!(me_route("/api/me/boards/a/b"), None);

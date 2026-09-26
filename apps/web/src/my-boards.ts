@@ -4,6 +4,7 @@ import {
   type MyBoardPatch,
   type MyBoards,
   myBoards,
+  type SubscribeOptions,
 } from "@stallion/client-sync";
 import { type RecentBoard, sortByRecency } from "./recents";
 import { syncUrlFor } from "./sync";
@@ -56,6 +57,14 @@ export const mergeBoards = (
   }
   return sortByRecency([...merged.values()]);
 };
+
+export type Merge = (local: readonly RecentBoard[]) => RecentBoard[];
+
+export const followBoards = (
+  api: MyBoards,
+  update: (merge: Merge) => void,
+  options: SubscribeOptions = {},
+): (() => void) => api.subscribe((rows) => update((local) => mergeBoards(local, rows)), options);
 
 const uploadable = (thumbnail: string): boolean =>
   thumbnail.length > 0 && thumbnail.length <= MAX_THUMBNAIL_BYTES;

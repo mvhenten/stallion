@@ -10,6 +10,7 @@ pub const MAX_THUMBNAIL_BYTES: usize = 24 * 1024;
 pub const MAX_NAME_CHARS: usize = 200;
 pub const PNG_DATA_URL: &str = "data:image/png;base64,";
 pub const TOMBSTONE_MS: u64 = 90 * 24 * 60 * 60 * 1000;
+pub const MAX_PUSH_BYTES: usize = 256 * 1024;
 
 pub const MIGRATIONS: &[&[&str]] = &[
     &["CREATE TABLE my_board (
@@ -84,6 +85,45 @@ pub trait BoardIndexStore {
     /// Every listed row's id and last_opened, without the thumbnails or tombstones.
     fn ages(&self) -> Result<Vec<(String, u64)>, String>;
     fn purge_removed_before(&self, cutoff_ms: u64) -> Result<(), String>;
+}
+
+pub trait Listener {
+    fn deliver(&self, frame: &[u8]);
+}
+
+#[derive(Serialize)]
+struct BoardsFrame<'a> {
+    kind: &'static str,
+    rows: &'a [MyBoard],
+    thumbnails: bool,
+}
+
+fn encode_boards(rows: &[MyBoard], thumbnails: bool) -> Vec<u8> {
+    let frame = BoardsFrame {
+        kind: "boards",
+        rows,
+        thumbnails,
+    };
+    let mut bytes = Vec::new();
+    ciborium::into_writer(&frame, &mut bytes).expect("writing to a Vec cannot fail");
+    bytes
+}
+
+/// The full list as one CBOR frame; past MAX_PUSH_BYTES the rows go without
+/// thumbnails and `thumbnails: false` tells the client to fetch them over REST.
+pub fn boards_frame(rows: &[MyBoard]) -> Vec<u8> {
+    let full = encode_boards(rows, true);
+    if full.len() <= MAX_PUSH_BYTES {
+        return full;
+    }
+    let bare: Vec<MyBoard> = rows
+        .iter()
+        .map(|row| MyBoard {
+            thumbnail: String::new(),
+            ..row.clone()
+        })
+        .collect();
+    encode_boards(&bare, false)
 }
 
 fn check(patch: &BoardPatch) -> Result<(), Refusal> {
@@ -191,6 +231,41 @@ impl<S: BoardIndexStore> UserBoards<S> {
             removed_at: now_ms.max(existing.map_or(0, |old| old.removed_at)),
         };
         self.store.put(&tombstone)
+    }
+
+    pub fn push<L: Listener>(&self, listeners: &[L], now_ms: u64) -> Result<(), String> {
+        if listeners.is_empty() {
+            return Ok(());
+        }
+        let frame = boards_frame(&self.list(now_ms)?);
+        for listener in listeners {
+            listener.deliver(&frame);
+        }
+        Ok(())
+    }
+
+    pub fn upsert_and_push<L: Listener>(
+        &self,
+        board_id: &str,
+        patch: BoardPatch,
+        now_ms: u64,
+        listeners: &[L],
+    ) -> Result<Result<MyBoard, Refusal>, String> {
+        let upserted = self.upsert(board_id, patch, now_ms)?;
+        if upserted.is_ok() {
+            self.push(listeners, now_ms)?;
+        }
+        Ok(upserted)
+    }
+
+    pub fn remove_and_push<L: Listener>(
+        &self,
+        board_id: &str,
+        now_ms: u64,
+        listeners: &[L],
+    ) -> Result<(), String> {
+        self.remove(board_id, now_ms)?;
+        self.push(listeners, now_ms)
     }
 }
 
@@ -523,6 +598,113 @@ mod tests {
         boards.remove("elsewhere", 7).unwrap();
         let board = boards.upsert("elsewhere", opened(3), 8).unwrap().unwrap();
         assert_eq!(board.removed_at, 7);
+    }
+
+    #[derive(Default)]
+    struct Socket {
+        frames: RefCell<Vec<Vec<u8>>>,
+    }
+
+    impl Listener for Socket {
+        fn deliver(&self, frame: &[u8]) {
+            self.frames.borrow_mut().push(frame.to_vec());
+        }
+    }
+
+    type Row = (String, String, String, u64);
+
+    fn field(map: &[(ciborium::Value, ciborium::Value)], name: &str) -> ciborium::Value {
+        map.iter()
+            .find(|(key, _)| key.as_text() == Some(name))
+            .map(|(_, value)| value.clone())
+            .unwrap()
+    }
+
+    fn text(value: ciborium::Value) -> String {
+        value.as_text().unwrap().to_owned()
+    }
+
+    fn pushed(frame: &[u8]) -> (String, Vec<Row>, bool) {
+        let value: ciborium::Value = ciborium::from_reader(frame).unwrap();
+        let map = value.into_map().unwrap();
+        let rows = field(&map, "rows")
+            .into_array()
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let row = row.into_map().unwrap();
+                let removed_at = field(&row, "removedAt").as_integer().unwrap();
+                (
+                    text(field(&row, "boardId")),
+                    text(field(&row, "name")),
+                    text(field(&row, "thumbnail")),
+                    u64::try_from(removed_at).unwrap(),
+                )
+            })
+            .collect();
+        (
+            text(field(&map, "kind")),
+            rows,
+            field(&map, "thumbnails").as_bool().unwrap(),
+        )
+    }
+
+    #[test]
+    fn an_upsert_and_a_removal_push_the_list_to_every_socket() {
+        let memory = MemoryIndex::default();
+        let boards = UserBoards::new(&memory);
+        let sockets = [Socket::default(), Socket::default()];
+        let thumbnail = format!("{PNG_DATA_URL}AAAA");
+        let patch = BoardPatch {
+            name: Some("Sketchbook".into()),
+            thumbnail: Some(thumbnail.clone()),
+            ..opened(5)
+        };
+        boards
+            .upsert_and_push("a", patch, 10, &sockets)
+            .unwrap()
+            .unwrap();
+        boards.remove_and_push("a", 20, &sockets).unwrap();
+        let row = |thumbnail: &str, removed_at: u64| -> Row {
+            (
+                "a".into(),
+                "Sketchbook".into(),
+                thumbnail.into(),
+                removed_at,
+            )
+        };
+        for socket in &sockets {
+            let frames = socket.frames.borrow();
+            assert_eq!(frames.len(), 2);
+            assert_eq!(
+                pushed(&frames[0]),
+                ("boards".into(), vec![row(&thumbnail, 0)], true)
+            );
+            assert_eq!(
+                pushed(&frames[1]),
+                ("boards".into(), vec![row("", 20)], true)
+            );
+        }
+    }
+
+    #[test]
+    fn a_push_over_the_limit_drops_the_thumbnails() {
+        let thumbnail = format!("{PNG_DATA_URL}{}", "A".repeat(MAX_THUMBNAIL_BYTES - 64));
+        let rows: Vec<MyBoard> = (0..12)
+            .map(|at| MyBoard {
+                board_id: format!("b{at}"),
+                name: format!("b{at}"),
+                last_opened: at,
+                thumbnail: thumbnail.clone(),
+                removed_at: 0,
+            })
+            .collect();
+        let (_, fits, thumbnails) = pushed(&boards_frame(&rows[..10]));
+        assert!(thumbnails && fits.iter().all(|row| row.2 == thumbnail));
+        let frame = boards_frame(&rows);
+        let (_, bare, thumbnails) = pushed(&frame);
+        assert!(!thumbnails && bare.len() == 12 && bare.iter().all(|row| row.2.is_empty()));
+        assert!(frame.len() <= MAX_PUSH_BYTES);
     }
 
     #[test]

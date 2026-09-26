@@ -1,11 +1,21 @@
-import type { MyBoards } from "@stallion/client-sync";
+import type { MyBoards, MyBoardsStatus } from "@stallion/client-sync";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { useLocation } from "wouter-preact";
 import { boardPath } from "./board-path";
 import { randomBoardId } from "./id";
-import { myBoardsForPage, syncBoards } from "./my-boards";
+import { followBoards, myBoardsForPage, syncBoards } from "./my-boards";
 import { loadRecents, type RecentBoard, removeRecent, renameRecent, saveRecents } from "./recents";
 import { reportLink } from "./report";
+import { CONNECTION_LABEL, type Connection, connectionFor } from "./sync";
+
+const LANDING_LABEL: Record<Connection, string> = {
+  ...CONNECTION_LABEL,
+  Connected: "Connected: boards update live from your other devices",
+  LocalOnly: "Local only: boards stay on this device",
+};
+
+const liveConnection = (status: MyBoardsStatus): Connection =>
+  connectionFor(status, globalThis.navigator?.onLine !== false);
 
 type Remote =
   | { state: "LocalOnly" }
@@ -86,24 +96,46 @@ export function Landing() {
   const [remote, setRemote] = useState<Remote>(() =>
     api ? { state: "Syncing" } : { state: "LocalOnly" },
   );
+  const [connection, setConnection] = useState<Connection>(() =>
+    api ? "Reconnecting" : "LocalOnly",
+  );
   const recentsRef = useRef(recents);
   recentsRef.current = recents;
 
   useEffect(() => {
     if (!api) return;
     let live = true;
+    let unfollow: (() => void) | undefined;
     syncBoards(api, loadRecents(localStorage)).then((synced) => {
       if (!live) return;
       saveRecents(localStorage, synced.boards);
       setRecents(synced.boards);
-      setRemote(
+      const next: Remote =
         synced.state === "Synced"
           ? { state: "Synced" }
-          : remoteAfter(synced.reason, synced.message),
+          : remoteAfter(synced.reason, synced.message);
+      setRemote(next);
+      if (next.state === "SignedOut") {
+        setConnection("Offline");
+        return;
+      }
+      unfollow = followBoards(
+        api,
+        (merge) =>
+          setRecents((current) => {
+            const next = merge(current);
+            saveRecents(localStorage, next);
+            return next;
+          }),
+        {
+          onStatus: (status) => setConnection(liveConnection(status)),
+          onError: ({ reason, message }) => setRemote(remoteAfter(reason, message)),
+        },
       );
     });
     return () => {
       live = false;
+      unfollow?.();
     };
   }, [api]);
 
@@ -149,6 +181,13 @@ export function Landing() {
     <main class="landing" data-sync={remote.state}>
       <header class="landing-header">
         <h1>Stallion</h1>
+        <span
+          class="status"
+          data-connection={connection}
+          role="status"
+          aria-label={LANDING_LABEL[connection]}
+          title={LANDING_LABEL[connection]}
+        />
         <button type="button" class="new-board" onClick={createBoard}>
           New board
         </button>
