@@ -117,6 +117,7 @@ export function createSurface(
   source: DrawingSource,
   currentTool: () => Tool,
   onView: (view: SurfaceView) => void = () => undefined,
+  onCommit: () => void = () => undefined,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -376,6 +377,7 @@ export function createSurface(
     draft = undefined;
     if (!stored) return;
     source.commit(stored);
+    onCommit();
   };
 
   const toLocal = (clientX: number, clientY: number): Point => {

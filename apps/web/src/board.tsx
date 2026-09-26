@@ -1,15 +1,19 @@
 import { openBoard } from "@stallion/client-sync";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { PinPrompt } from "./pin-prompt";
+import { loadRecents, saveRecents, upsertRecent } from "./recents";
 import { errorMessage, reportLink } from "./report";
 import { boardLink, SharePanel } from "./share";
 import { createSurface, type Surface, type SurfaceView, type Tool, type ToolMode } from "./surface";
 import { type BoardSource, type Connection, openSource, syncUrlFor } from "./sync";
+import { captureThumbnail } from "./thumbnail";
 import { type HistoryState, Toolbar } from "./toolbar";
 
 const EMPTY_HISTORY: HistoryState = { canUndo: false, canRedo: false };
 
 const INITIAL_VIEW: SurfaceView = { level: 0, contentLevels: [] };
+
+const THUMBNAIL_DELAY_MS = 2000;
 
 const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return undefined;
@@ -48,6 +52,7 @@ export function Board({ boardId }: { boardId: string }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    saveRecents(localStorage, upsertRecent(loadRecents(localStorage), { id: boardId }));
     const source = openSource({
       url: syncUrlFor(import.meta.env.VITE_SYNC_URL, window.location),
       boardId,
@@ -68,14 +73,34 @@ export function Board({ boardId }: { boardId: string }) {
       else source.history.redo();
     };
     window.addEventListener("keydown", onKey);
+    let thumbnailTimer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleThumbnail = () => {
+      clearTimeout(thumbnailTimer);
+      thumbnailTimer = setTimeout(() => {
+        const thumbnail = captureThumbnail(canvas);
+        if (!thumbnail) return;
+        saveRecents(
+          localStorage,
+          upsertRecent(loadRecents(localStorage), { id: boardId, thumbnail }),
+        );
+      }, THUMBNAIL_DELAY_MS);
+    };
     let surface: Surface | undefined;
     try {
-      surface = createSurface(canvas, boardId, source, () => toolRef.current, setView);
+      surface = createSurface(
+        canvas,
+        boardId,
+        source,
+        () => toolRef.current,
+        setView,
+        scheduleThumbnail,
+      );
       surfaceRef.current = surface;
     } catch (failure) {
       setError(`Could not start the drawing surface: ${errorMessage(failure)}`);
     }
     return () => {
+      clearTimeout(thumbnailTimer);
       window.removeEventListener("keydown", onKey);
       unobserve();
       sourceRef.current = undefined;
