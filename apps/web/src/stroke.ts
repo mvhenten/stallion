@@ -47,7 +47,15 @@ export const outlinePath = (
   return path;
 };
 
+const randomHex = (bytes: number): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+const newObjectId = (): string => `${Date.now().toString(36).padStart(9, "0")}${randomHex(6)}`;
+
 export type Draft = {
+  objectId: string;
   colour: number;
   size: PencilSize;
   nativeZoom: number;
@@ -55,11 +63,17 @@ export type Draft = {
 };
 
 export const startDraft = (colour: number, size: PencilSize, zoom: number): Draft => ({
+  objectId: newObjectId(),
   colour,
   size,
   nativeZoom: nativeLevel(zoom),
   points: [],
 });
+
+export const continueDraft = (draft: Draft): Draft => {
+  const last = draft.points.at(-1);
+  return { ...draft, objectId: newObjectId(), points: last ? [last] : [] };
+};
 
 const draftBounds = (draft: Draft): BBox => {
   const margin = strokeWorldWidth(draft.size, draft.nativeZoom);
@@ -73,13 +87,6 @@ const draftBounds = (draft: Draft): BBox => {
   };
 };
 
-const randomHex = (bytes: number): string =>
-  Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-
-const newObjectId = (): string => `${Date.now().toString(36).padStart(9, "0")}${randomHex(6)}`;
-
 export const finishDraft = (draft: Draft): StoredObject | undefined => {
   if (draft.points.length === 0) return undefined;
   const bbox = draftBounds(draft);
@@ -88,7 +95,7 @@ export const finishDraft = (draft: Draft): StoredObject | undefined => {
   const { tile } = placed;
   const stroke: Stroke = {
     type: "Stroke",
-    objectId: newObjectId(),
+    objectId: draft.objectId,
     nativeZoom: draft.nativeZoom,
     bbox,
     colour: draft.colour,
@@ -124,7 +131,7 @@ export const strokeFramePath = (stroke: Stroke, frame: StrokeFrame): Path2D =>
   outlinePath(frame.points, strokeWorldWidth(stroke.size, stroke.nativeZoom) / frame.scale, true);
 
 export const draftScreenPath = (
-  draft: Draft,
+  draft: Pick<Draft, "size" | "nativeZoom" | "points">,
   toScreen: (world: Point) => Point,
   zoom: number,
 ): Path2D =>

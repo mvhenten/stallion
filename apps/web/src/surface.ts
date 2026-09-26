@@ -1,4 +1,5 @@
 import type { StoredObject } from "@stallion/client-store";
+import { createInkPublisher, createInkReader, type LiveInk } from "@stallion/client-sync";
 import type { Point, Tile } from "@stallion/geometry";
 import type { PencilSize, Stroke } from "@stallion/schema";
 import { Gesture } from "@use-gesture/vanilla";
@@ -18,6 +19,7 @@ import { hitsStroke } from "./eraser";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
 import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
 import {
+  continueDraft,
   type Draft,
   draftScreenPath,
   finishDraft,
@@ -52,6 +54,8 @@ const BLOCKED_TOUCH_EVENTS = [
 const ERASER_STEP_PX = 4;
 
 const CURSOR_THROTTLE_MS = 50;
+
+export const INK_ALPHA = 0.6;
 
 type RemoteCursor = { x: number; y: number; name: string; colour: string };
 
@@ -141,6 +145,10 @@ export function createSurface(
   let dragButton = 0;
   const input = createInput();
   const awareness = source.awareness;
+  const publisher = awareness && createInkPublisher(awareness);
+  const reader = createInkReader();
+  const landed = new Set<string>();
+  let inks: LiveInk[] = [];
 
   const size = () => ({ width: canvas.clientWidth, height: canvas.clientHeight });
 
@@ -169,6 +177,7 @@ export function createSurface(
       ctx.fillStyle = PALETTE[entry.stroke.colour] ?? PALETTE[0];
       ctx.fill(entry.path);
     }
+    if (inks.length > 0) renderInks(dpr);
     if (draft && draft.points.length > 0) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = PALETTE[draft.colour] ?? PALETTE[0];
@@ -176,6 +185,17 @@ export function createSurface(
     }
     renderSelection(dpr);
     if (cursors.length > 0) renderCursors(dpr);
+  };
+
+  const renderInks = (dpr: number) => {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = INK_ALPHA;
+    for (const ink of inks) {
+      if (ink.points.length === 0) continue;
+      ctx.fillStyle = PALETTE[ink.colour] ?? PALETTE[0];
+      ctx.fill(draftScreenPath(ink, (world) => worldToScreen(camera, world), camera.zoom));
+    }
+    ctx.globalAlpha = 1;
   };
 
   const renderSelection = (dpr: number) => {
@@ -311,6 +331,10 @@ export function createSurface(
       if (stored) add(stored);
       else discard(objectId);
     }
+    if (inks.some((ink) => changed.has(ink.strokeId))) {
+      for (const ink of inks) if (changed.has(ink.strokeId)) landed.add(ink.strokeId);
+      inks = inks.filter((ink) => !landed.has(ink.strokeId));
+    }
     requestRender();
     reportView();
   };
@@ -322,6 +346,12 @@ export function createSurface(
       const cursor = remoteCursor(clientId, state);
       return cursor ? [cursor] : [];
     });
+    const live = [...reader.read(awareness.getStates(), awareness.clientID).values()];
+    for (const strokeId of landed) {
+      if (!live.some((ink) => ink.strokeId === strokeId)) landed.delete(strokeId);
+    }
+    for (const ink of live) if (entries.has(ink.strokeId)) landed.add(ink.strokeId);
+    inks = live.filter((ink) => !landed.has(ink.strokeId));
     requestRender();
   };
 
@@ -371,13 +401,22 @@ export function createSurface(
     reportView();
   };
 
+  const shareDraft = (next: Draft) => {
+    const { objectId, colour, size, nativeZoom, points } = next;
+    publisher?.start({ strokeId: objectId, colour, size, nativeZoom });
+    publisher?.extend(points);
+  };
+
   const commit = () => {
     if (!draft) return;
+    publisher?.finish();
     const stored = finishDraft(draft);
     draft = undefined;
-    if (!stored) return;
-    source.commit(stored);
-    onCommit();
+    if (stored) {
+      source.commit(stored);
+      onCommit();
+    }
+    publisher?.clear();
   };
 
   const toLocal = (clientX: number, clientY: number): Point => {
@@ -395,12 +434,14 @@ export function createSurface(
     if (!draft) return;
     const world = screenToWorld(camera, screen);
     if (draft.points.length >= MAX_POINTS) {
-      const last = draft.points.at(-1);
-      const next: Draft = { ...draft, points: last ? [last] : [] };
+      const next = continueDraft(draft);
       commit();
       draft = next;
+      shareDraft(next);
     }
-    draft.points.push([world.x, world.y, pressure]);
+    const point: [number, number, number] = [world.x, world.y, pressure];
+    draft.points.push(point);
+    publisher?.extend([point]);
   };
 
   const pointerKind = (event: PointerEvent): PointerKind =>
@@ -425,6 +466,7 @@ export function createSurface(
             tool.size,
             camera.zoom,
           );
+          shareDraft(draft);
           addPoint(effect.point, event ? pressureOf(event) : 0.5);
           break;
         }
@@ -448,6 +490,7 @@ export function createSurface(
           eraser = undefined;
           drag = undefined;
           draft = undefined;
+          publisher?.clear();
           source.history.checkpoint();
           break;
         case "Pan":
@@ -603,6 +646,7 @@ export function createSurface(
     dispose() {
       clearTimeout(settleTimer);
       clearTimeout(pendingTimer);
+      publisher?.clear();
       cancelAnimationFrame(frame);
       stopAnimation();
       gesture.destroy();

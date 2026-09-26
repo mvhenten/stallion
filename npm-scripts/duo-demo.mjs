@@ -15,6 +15,9 @@ const B_DELAY_MS = 2000;
 const SETTLE_MS = 3000;
 const MIN_INK_PIXELS = 200;
 const STEP_MS = 12;
+const PAPER = [0xfb, 0xfa, 0xf7];
+const INK_ALPHA = 0.6;
+const MID_STROKE_WAIT_MS = 800;
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 
 class DemoFailure extends Error {}
@@ -133,6 +136,18 @@ const draw = async (page, points) => {
   await page.mouse.up();
 };
 
+const translucent = (colour) => ({
+  label: colour.label,
+  rgb: colour.rgb.map((channel, i) => Math.round(channel * INK_ALPHA + PAPER[i] * (1 - INK_ALPHA))),
+});
+
+const zigzag = (x, top, bottom, width, count) =>
+  Array.from({ length: count * 20 + 1 }, (_, i) => {
+    const t = i / 20;
+    const phase = t % 2 < 1 ? t % 1 : 1 - (t % 1);
+    return { x: x + (width * i) / (count * 20), y: top + (bottom - top) * phase };
+  });
+
 const inkPixels = (page, colour) =>
   page.evaluate(([r, g, b]) => {
     const canvas = document.querySelector("canvas.surface");
@@ -233,6 +248,33 @@ const main = async () => {
     const [statusA, statusB] = await Promise.all([connection(a), connection(b)]);
     if (statusA !== "Connected") failures.push(`A status is ${statusA}`);
     if (statusB !== "Connected") failures.push(`B status is ${statusB}`);
+    const partial = zigzag(40, 200, 600, 240, 6);
+    const [first, ...rest] = partial;
+    await a.mouse.move(first.x, first.y);
+    await a.mouse.down();
+    for (const point of rest) {
+      await a.mouse.move(point.x, point.y);
+      await a.waitForTimeout(STEP_MS);
+    }
+    await b.waitForTimeout(MID_STROKE_WAIT_MS);
+    const partialOnB = await inkPixels(b, translucent(BLUE));
+    for (const [name, page] of [
+      ["a-mid", a],
+      ["b-mid", b],
+    ]) {
+      const path = join(dir, `${name}.png`);
+      await page.screenshot({ path });
+      artifacts.push(path);
+    }
+    await a.mouse.up();
+    await b.waitForTimeout(SETTLE_MS);
+    const committedOnB = await inkPixels(b, BLUE);
+    console.log(
+      `mid-stroke: B shows ${partialOnB} px of partial ink from A; blue on B ${blueOnB} px before release, ${committedOnB} px after`,
+    );
+    if (partialOnB < MIN_INK_PIXELS)
+      failures.push(`B shows ${partialOnB} px of partial ink from A`);
+    if (committedOnB <= blueOnB) failures.push("B did not show the committed zigzag");
     const own = `blue on A ${await inkPixels(a, BLUE)} px, red on B ${await inkPixels(b, RED)} px`;
     console.log(`ink: red on A ${redOnA} px, blue on B ${blueOnB} px (${own})`);
   } catch (error) {
