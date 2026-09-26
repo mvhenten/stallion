@@ -1,4 +1,6 @@
 import { LevelChip } from "./level-chip";
+import type { Presence } from "./presence";
+import { FollowPill, PresenceStrip } from "./presence-strip";
 import { PALETTE, PENCIL_SIZES } from "./stroke";
 import type { SurfaceView, Tool } from "./surface";
 import { CONNECTION_LABEL, type Connection } from "./sync";
@@ -18,6 +20,8 @@ type ToolbarProps = {
   onLevel: (level: number) => void;
   shareOpen: boolean;
   onShare: () => void;
+  presence: Presence;
+  onFollow: (clientId: number | undefined) => void;
 };
 
 export function Toolbar({
@@ -31,6 +35,8 @@ export function Toolbar({
   onLevel,
   shareOpen,
   onShare,
+  presence,
+  onFollow,
 }: ToolbarProps) {
   return (
     <div class="toolbar" role="toolbar" aria-label="Drawing tools">
@@ -197,6 +203,8 @@ export function Toolbar({
         aria-label={CONNECTION_LABEL[connection]}
         title={CONNECTION_LABEL[connection]}
       />
+      <PresenceStrip presence={presence} onFollow={onFollow} />
+      <FollowPill presence={presence} onStop={() => onFollow(undefined)} />
     </div>
   );
 }

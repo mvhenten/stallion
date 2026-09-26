@@ -1,6 +1,7 @@
 import { openBoard } from "@stallion/client-sync";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { PinPrompt } from "./pin-prompt";
+import type { Presence } from "./presence";
 import { loadRecents, saveRecents, upsertRecent } from "./recents";
 import { errorMessage, reportLink } from "./report";
 import { boardLink, SharePanel } from "./share";
@@ -14,6 +15,8 @@ const EMPTY_HISTORY: HistoryState = { canUndo: false, canRedo: false };
 const INITIAL_VIEW: SurfaceView = { level: 0, contentLevels: [] };
 
 const THUMBNAIL_DELAY_MS = 2000;
+
+const NO_PRESENCE: Presence = { peers: [], following: undefined };
 
 const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return undefined;
@@ -43,6 +46,7 @@ export function Board({ boardId }: { boardId: string }) {
   const [history, setHistory] = useState<HistoryState>(EMPTY_HISTORY);
   const [view, setView] = useState<SurfaceView>(INITIAL_VIEW);
   const [shareOpen, setShareOpen] = useState(false);
+  const [presence, setPresence] = useState<Presence>(NO_PRESENCE);
   const sourceRef = useRef<BoardSource | undefined>(undefined);
   const surfaceRef = useRef<Surface | undefined>(undefined);
   const toolRef = useRef(tool);
@@ -94,6 +98,7 @@ export function Board({ boardId }: { boardId: string }) {
         () => toolRef.current,
         setView,
         scheduleThumbnail,
+        setPresence,
       );
       surfaceRef.current = surface;
     } catch (failure) {
@@ -105,6 +110,7 @@ export function Board({ boardId }: { boardId: string }) {
       unobserve();
       sourceRef.current = undefined;
       setHistory(EMPTY_HISTORY);
+      setPresence(NO_PRESENCE);
       surfaceRef.current = undefined;
       surface?.dispose();
       source
@@ -133,6 +139,8 @@ export function Board({ boardId }: { boardId: string }) {
         onLevel={(level) => surfaceRef.current?.zoomToLevel(level)}
         shareOpen={shareOpen}
         onShare={() => setShareOpen(!shareOpen)}
+        presence={presence}
+        onFollow={(clientId) => surfaceRef.current?.follow(clientId)}
       />
       {shareOpen && (
         <SharePanel

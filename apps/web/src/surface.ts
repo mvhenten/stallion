@@ -16,8 +16,19 @@ import {
 } from "./camera";
 import { isVisible } from "./culling";
 import { hitsStroke } from "./eraser";
+import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
 import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
+import {
+  displayName,
+  PRESENCE_THROTTLE_MS,
+  type Presence,
+  peersOf,
+  presenceColour,
+  samePresence,
+  type Viewport,
+  viewportOf,
+} from "./presence";
 import {
   continueDraft,
   type Draft,
@@ -65,13 +76,10 @@ const remoteCursor = (clientId: number, state: unknown): RemoteCursor | undefine
   if (typeof cursor !== "object" || cursor === null) return undefined;
   const { x, y } = cursor as Record<string, unknown>;
   if (typeof x !== "number" || typeof y !== "number") return undefined;
-  const name =
-    typeof user === "object" &&
-    user !== null &&
-    typeof (user as { name?: unknown }).name === "string"
-      ? (user as { name: string }).name
-      : "Guest";
-  return { x, y, name, colour: PALETTE[clientId % PALETTE.length] ?? PALETTE[0] };
+  const name = displayName(
+    typeof user === "object" && user !== null ? (user as { name?: unknown }).name : undefined,
+  );
+  return { x, y, name, colour: presenceColour(clientId) };
 };
 
 export const PAPER = "#fbfaf7";
@@ -113,7 +121,13 @@ const saveCamera = (boardId: string, camera: Camera): void => {
 
 export type SurfaceView = { level: number; contentLevels: readonly number[] };
 
-export type Surface = { zoomToLevel(level: number): void; dispose(): void };
+export type Surface = {
+  zoomToLevel(level: number): void;
+  follow(clientId: number | undefined): void;
+  dispose(): void;
+};
+
+const NO_PRESENCE: Presence = { peers: [], following: undefined };
 
 export function createSurface(
   canvas: HTMLCanvasElement,
@@ -122,6 +136,7 @@ export function createSurface(
   currentTool: () => Tool,
   onView: (view: SurfaceView) => void = () => undefined,
   onCommit: () => void = () => undefined,
+  onPresence: (presence: Presence) => void = () => undefined,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -143,6 +158,10 @@ export function createSurface(
   let animation = 0;
   let reported: SurfaceView | undefined;
   let dragButton = 0;
+  let presence = NO_PRESENCE;
+  let published: Viewport | undefined;
+  let publishedAt = Number.NEGATIVE_INFINITY;
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
   const input = createInput();
   const awareness = source.awareness;
   const publisher = awareness && createInkPublisher(awareness);
@@ -242,6 +261,7 @@ export function createSurface(
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
     render();
+    publishViewport();
   };
 
   const add = ({ tile, object }: StoredObject) => {
@@ -339,9 +359,23 @@ export function createSurface(
     reportView();
   };
 
+  const reportPresence = () => {
+    if (!awareness) return;
+    const next: Presence = {
+      peers: peersOf(awareness.getStates(), awareness.clientID).map(
+        ({ viewport: _viewport, ...peer }) => peer,
+      ),
+      following: follow.target,
+    };
+    if (samePresence(presence, next)) return;
+    presence = next;
+    onPresence(presence);
+  };
+
   const onAwareness = () => {
     if (!awareness) return;
-    cursors = [...awareness.getStates()].flatMap(([clientId, state]) => {
+    const states = awareness.getStates();
+    cursors = [...states].flatMap(([clientId, state]) => {
       if (clientId === awareness.clientID) return [];
       const cursor = remoteCursor(clientId, state);
       return cursor ? [cursor] : [];
@@ -352,7 +386,38 @@ export function createSurface(
     }
     for (const ink of live) if (entries.has(ink.strokeId)) landed.add(ink.strokeId);
     inks = live.filter((ink) => !landed.has(ink.strokeId));
+    follow.peers(peersOf(states, awareness.clientID));
+    reportPresence();
     requestRender();
+  };
+
+  const publishViewport = () => {
+    if (!awareness) return;
+    const { width, height } = size();
+    const viewport = viewportOf(camera, width, height);
+    if (
+      published &&
+      published.x === viewport.x &&
+      published.y === viewport.y &&
+      published.zoom === viewport.zoom
+    )
+      return;
+    const wait = publishedAt + PRESENCE_THROTTLE_MS - performance.now();
+    if (wait > 0) {
+      if (publishTimer === undefined) {
+        publishTimer = setTimeout(() => {
+          publishTimer = undefined;
+          publishViewport();
+        }, wait);
+      }
+      return;
+    }
+    published = viewport;
+    publishedAt = performance.now();
+    awareness.setLocalStateField("presence", {
+      colour: presenceColour(awareness.clientID),
+      viewport,
+    });
   };
 
   const shareCursor = (screen: Point | undefined) => {
@@ -399,6 +464,7 @@ export function createSurface(
     requestRender();
     settle();
     reportView();
+    publishViewport();
   };
 
   const shareDraft = (next: Draft) => {
@@ -406,6 +472,15 @@ export function createSurface(
     publisher?.start({ strokeId: objectId, colour, size, nativeZoom });
     publisher?.extend(points);
   };
+  const follow = createFollow({
+    camera: () => camera,
+    size,
+    move: moveCamera,
+    requestFrame: (step) => requestAnimationFrame(step),
+    cancelFrame: (handle) => cancelAnimationFrame(handle),
+    now: () => performance.now(),
+    onChange: reportPresence,
+  });
 
   const commit = () => {
     if (!draft) return;
@@ -494,9 +569,11 @@ export function createSurface(
           source.history.checkpoint();
           break;
         case "Pan":
+          follow.stop();
           moveCamera(pan(camera, effect.dx, effect.dy));
           break;
         case "Pinch":
+          follow.stop();
           moveCamera(pinch(camera, effect));
           break;
       }
@@ -510,6 +587,7 @@ export function createSurface(
   };
 
   const zoomToLevel = (level: number) => {
+    follow.stop();
     stopAnimation();
     const from = camera;
     const { width, height } = size();
@@ -571,13 +649,17 @@ export function createSurface(
     origin: [number, number];
     da: [number, number];
   }) => {
-    if (first) stopAnimation();
+    if (first) {
+      stopAnimation();
+      follow.stop();
+    }
     apply(input.pinch({ first, last, origin: toLocal(origin[0], origin[1]), distance: da[0] }));
   };
 
   const onWheel = ({ event }: { event: WheelEvent }) => {
     event.preventDefault();
     stopAnimation();
+    follow.stop();
     const factor = wheelFactor(event.ctrlKey ? event.deltaY * 3 : event.deltaY, event.deltaMode);
     moveCamera(zoomAt(camera, localPoint(event), factor));
   };
@@ -643,8 +725,18 @@ export function createSurface(
 
   return {
     zoomToLevel,
+    follow(clientId) {
+      if (clientId === undefined || clientId === follow.target) {
+        follow.stop();
+        return;
+      }
+      stopAnimation();
+      follow.start(clientId);
+    },
     dispose() {
       clearTimeout(settleTimer);
+      clearTimeout(publishTimer);
+      follow.dispose();
       clearTimeout(pendingTimer);
       publisher?.clear();
       cancelAnimationFrame(frame);
