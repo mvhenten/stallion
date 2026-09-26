@@ -32,6 +32,8 @@ const IDLE_MS: u64 = 60_000;
 
 const USER_HEADER: &str = "X-Stallion-User";
 const PASS_HEADER: &str = "X-Stallion-Pass";
+const COMMIT_HEADER: &str = "x-stallion-commit";
+const COMMIT: &str = env!("STALLION_COMMIT");
 const PASS_SECRET: &str = "BOARD_PASS_SECRET";
 const PIN_CHANGED: u16 = 4003;
 
@@ -152,8 +154,21 @@ struct PinBody {
     pin: String,
 }
 
+fn stamp_commit(response: Response) -> Result<Response> {
+    let headers = Headers::new();
+    for (name, value) in response.headers().entries() {
+        headers.append(&name, &value)?;
+    }
+    headers.set(COMMIT_HEADER, COMMIT)?;
+    Ok(response.with_headers(headers))
+}
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+    stamp_commit(route(req, env).await?)
+}
+
+async fn route(req: Request, env: Env) -> Result<Response> {
     let user = match caller(&req, &env).await? {
         Caller::Denied(reason) => {
             console_log!("Access rejected the request: {reason}");
