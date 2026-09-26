@@ -60,7 +60,22 @@ The Worker needs one secret, `BOARD_PASS_SECRET`, the HMAC key for board passes.
 
 Cloudflare Access guards the app. The Worker verifies the RS256 JWT from the `Cf-Access-Jwt-Assertion` header or the `CF_Authorization` cookie on every `/api/*` request: signature against the team keys at `https://<ACCESS_TEAM_DOMAIN>/cdn-cgi/access/certs` (cached for an hour per isolate), `aud` against `ACCESS_AUD`, `iss` and `exp`. Anything else gets a 401. The verified email reaches the `Board` in the `X-Stallion-User` header, and the server writes it into every awareness state from that socket as `user.name`.
 
-Both vars live in `wrangler.jsonc`. Set `ACCESS_TEAM_DOMAIN` to `<team>.cloudflareaccess.com` and `ACCESS_AUD` to the application audience tag. Leave both empty for `wrangler dev`: the check is skipped and the Worker logs once that Access is disabled. Setting only one is an error.
+Both vars stay empty in `wrangler.jsonc`, so `wrangler dev` skips the check and logs once that Access is disabled. The deploy workflow passes the OpenTofu outputs to `wrangler deploy --var`: `ACCESS_TEAM_DOMAIN` is `<team>.cloudflareaccess.com` and `ACCESS_AUD` is the application audience tag. Setting only one is an error.
+
+## Infra
+
+OpenTofu in `infra/` manages Cloudflare Access with the `cloudflare/cloudflare` v5 provider: the Zero Trust organization (imported; its name and team domain stay as they are), a one-time PIN identity provider, a self-hosted Access application for the Worker hostname with a 720h session that redirects straight to that provider, and an allow policy for the account owner's email from the `cloudflare_user` data source. Nothing is changed in the dashboard.
+
+The `infra` job in `deploy.yml` runs before the Worker deploy. It plans on pull requests that touch `infra/`; on main it plans, applies and commits `infra/terraform.tfstate` back to main as `github-actions[bot]` with `[skip ci]`. The state is the only record of what exists; never delete or hand-edit it.
+
+Locally, `npm run infra:plan` and `npm run infra:apply` run `tofu init` and the command in `infra/`, reading `CLOUDFLARE_API_TOKEN` from `~/.config/stallion/cf-env`. Apply from CI, not locally.
+
+The `CLOUDFLARE_API_TOKEN` secret needs these permissions, as the API token editor names them:
+
+- Account, Access: Organizations, Identity Providers, and Groups, Edit
+- Account, Access: Apps and Policies, Edit
+- Account, Workers Scripts, Edit
+- User, User Details, Read
 
 ## Wire protocol
 

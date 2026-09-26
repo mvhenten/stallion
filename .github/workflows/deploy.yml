@@ -5,18 +5,85 @@ on:
     workflows: [ci]
     types: [completed]
     branches: [main]
+  pull_request:
+    paths: [infra/**, .github/workflows/deploy.yml]
   workflow_dispatch:
 
 concurrency:
-  group: deploy
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('infra-plan-{0}', github.ref) || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  infra:
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       !contains(github.event.workflow_run.head_commit.message, '[skip ci]'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_IN_AUTOMATION: "1"
+    outputs:
+      team_domain: ${{ steps.outputs.outputs.team_domain }}
+      aud: ${{ steps.outputs.outputs.aud }}
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+      - name: Use the state recorded on main
+        run: |
+          git fetch --depth=1 origin main
+          if git cat-file -e origin/main:infra/terraform.tfstate 2>/dev/null; then
+            git show origin/main:infra/terraform.tfstate > terraform.tfstate
+          fi
+      - run: tofu init -input=false
+      - run: tofu plan -input=false -out=tfplan
+      - if: github.event_name != 'pull_request'
+        run: tofu apply -input=false -auto-approve tfplan
+      - name: Commit state
+        if: github.event_name != 'pull_request'
+        run: |
+          cp terraform.tfstate "$RUNNER_TEMP/terraform.tfstate"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            cp "$RUNNER_TEMP/terraform.tfstate" terraform.tfstate
+            git add terraform.tfstate
+            if git diff --cached --quiet; then
+              exit 0
+            fi
+            git commit -m "chore(infra): record opentofu state [skip ci]"
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "push attempt $attempt lost a race with main"
+          done
+          exit 1
+      - id: outputs
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "team_domain=$(tofu output -raw access_team_domain)" >> "$GITHUB_OUTPUT"
+          echo "aud=$(tofu output -raw access_aud)" >> "$GITHUB_OUTPUT"
+
   deploy:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    needs: infra
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -38,4 +105,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: deploy --var ACCESS_TEAM_DOMAIN:${{ needs.infra.outputs.team_domain }} --var ACCESS_AUD:${{ needs.infra.outputs.aud }}
