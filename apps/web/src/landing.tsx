@@ -25,6 +25,9 @@ const relativeTime = (from: number, now: number): string => {
   return relativeTimeFormat.format(-Math.round(diff / MINUTE_MS), "minute");
 };
 
+export const lastOpenedLabel = (lastOpened: number, now: number): string =>
+  lastOpened ? relativeTime(lastOpened, now) : "not opened yet";
+
 export function Landing() {
   const [, navigate] = useLocation();
   const [recents, setRecents] = useState<RecentBoard[]>(() => loadRecents(localStorage));
@@ -73,7 +76,7 @@ export function Landing() {
                 ) : (
                   <span class="recent-thumb recent-thumb-empty" aria-hidden="true" />
                 )}
-                <span class="recent-time">{relativeTime(recent.lastOpened, Date.now())}</span>
+                <span class="recent-time">{lastOpenedLabel(recent.lastOpened, Date.now())}</span>
               </button>
               <input
                 class="recent-name"
