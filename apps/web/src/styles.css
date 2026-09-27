@@ -824,6 +824,10 @@ body,
   grid-column: 1 / -1;
 }
 
+.toolbar[data-layout="Expanded"] .toolbar-row {
+  align-self: stretch;
+}
+
 .toolbar[data-layout="Expanded"] .toolbar-row + .toolbar-row,
 .toolbar[data-layout="Palette"] .toolbar-row + .toolbar-row {
   padding-top: 4px;
