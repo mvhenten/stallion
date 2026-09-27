@@ -10,7 +10,10 @@ import {
   type Control,
   expandedAfterPick,
   loadExpanded,
+  loadMode,
   saveExpanded,
+  saveMode,
+  type ToolbarMode,
   toolbarLayout,
   toolbarRows,
   WIDE_QUERY,
@@ -82,14 +85,22 @@ export function Toolbar({
 }: ToolbarProps) {
   const wide = useWide();
   const [expanded, setExpanded] = useState(() => loadExpanded(storage));
-  const layout = toolbarLayout(wide, expanded);
+  const [mode, setMode] = useState<ToolbarMode>(() => loadMode(storage));
+  const layout = toolbarLayout(mode, wide, expanded);
+  const palette = layout === "Palette";
 
   const expand = (next: boolean) => {
     setExpanded(next);
     saveExpanded(storage, next);
   };
+  const flip = () => {
+    const next = palette ? "Quick" : "Palette";
+    setMode(next);
+    saveMode(storage, next);
+  };
   const pick = (next: Tool) => {
     onChange(next);
+    if (palette) return;
     const after = expandedAfterPick(wide, expanded);
     if (after !== expanded) expand(after);
   };
@@ -247,7 +258,7 @@ export function Toolbar({
         title="Share the board link, QR code and PIN"
         onClick={() => {
           onShare();
-          if (!wide && expanded) expand(false);
+          if (layout === "Expanded") expand(false);
         }}
       >
         <Icon d="M8.6 10.6l6.8-4M8.6 13.4l6.8 4M18 5a2.5 2.5 0 11-.01 0M6 9.5a2.5 2.5 0 11-.01 0M18 16.5a2.5 2.5 0 11-.01 0" />
@@ -284,11 +295,33 @@ export function Toolbar({
         <Icon d={expanded ? "M6 15l6-6 6 6" : "M6 9l6 6 6-6"} join />
       </button>
     ),
+    Flip: () => (
+      <button
+        key="Flip"
+        type="button"
+        class="tool"
+        data-toolbar-flip
+        aria-label={palette ? "Show quick bar" : "Show palette"}
+        title={palette ? "Switch to the quick bar" : "Switch to the palette"}
+        onClick={flip}
+      >
+        <Icon
+          d={palette ? "M3 5h18v6H3zM6 16h12M6 20h12" : "M4 3h6v18H4zM14 7h6M14 12h6M14 17h6"}
+          join
+        />
+      </button>
+    ),
   };
 
   return (
     <>
-      <div class="toolbar" data-layout={layout} role="toolbar" aria-label="Drawing tools">
+      <div
+        class="toolbar"
+        data-layout={layout}
+        role="toolbar"
+        aria-label="Drawing tools"
+        aria-orientation={palette ? "vertical" : "horizontal"}
+      >
         {toolbarRows(layout).map((row, index) => (
           <div key={row.join()} class="toolbar-row" data-row={index}>
             {row.map((control) => controls[control]())}

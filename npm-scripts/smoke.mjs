@@ -61,8 +61,8 @@ const launch = async (chromium) => {
   return chromium.launch({ headless: true });
 };
 
-const strokePath = (viewport) => {
-  const cx = viewport.width * (0.35 + Math.random() * 0.3);
+const strokePath = (viewport, left = 0) => {
+  const cx = left + (viewport.width - left) * (0.35 + Math.random() * 0.3);
   const cy = viewport.height * (0.45 + Math.random() * 0.25);
   return Array.from({ length: 24 }, (_, i) => {
     const t = i / 23;
@@ -252,6 +252,65 @@ const smokeScheme = async ({ browser, devices, analyser, url, scheme, dir }) => 
   }
 };
 
+const PALETTE = '.toolbar[data-layout="Palette"]';
+
+const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
+  const context = await browser.newContext({
+    ...devices[DEVICE],
+    colorScheme: "light",
+    extraHTTPHeaders: accessHeaders(),
+  });
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`palette: ${problems[0]}`);
+  };
+  const shot = async (name, clip) => {
+    const path = join(dir, `palette-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    await page.locator("[data-toolbar-flip]").tap();
+    await page.locator(PALETTE).waitFor({ state: "visible", timeout: 5000 });
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    const palette = page.locator(PALETTE);
+    if (!(await palette.isVisible())) fail("palette: the quick bar came back after a reload");
+    await palette.getByRole("button", { name: "Large pencil" }).tap();
+    await palette.getByRole("button", { name: "Colour 2" }).tap();
+    await page.waitForTimeout(500);
+    check();
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail("palette: no bounding box");
+    const points = strokePath(viewport, box.x + box.width + CLIP_PAD);
+    const clip = clipFor(points);
+    const rowsBefore = totalRows(await countStoredRows(page));
+    const blank = await shot("before", clip);
+    await drawWithTouch(page, points);
+    await page.waitForTimeout(800);
+    const drawn = await shot("drawn", clip);
+    const full = await shot("drawn-full");
+    const ink = await inkStats(analyser, blank.buffer, drawn.buffer);
+    if (ink.changedRatio < MIN_INK_RATIO)
+      fail("palette: stroke drawn from the palette did not show");
+    const rowsAfter = totalRows(await countStoredRows(page));
+    if (rowsAfter <= rowsBefore) {
+      fail(`palette: stroke not stored, ${rowsBefore} rows before and ${rowsAfter} after`);
+    }
+    check();
+    return {
+      ink: Number(ink.changedRatio.toFixed(3)),
+      screenshots: [blank.path, drawn.path, full.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -273,6 +332,9 @@ const main = async () => {
       console.log(`PASS ${result.scheme}: ink ${result.ink}, rows ${JSON.stringify(result.rows)}`);
       for (const path of result.screenshots) console.log(`  ${path}`);
     }
+    const palette = await smokePalette({ browser, devices, analyser, url: options.url, dir });
+    console.log(`PASS palette: flip kept after reload, ink ${palette.ink}`);
+    for (const path of palette.screenshots) console.log(`  ${path}`);
   } finally {
     await browser.close();
   }

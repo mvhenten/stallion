@@ -1,6 +1,10 @@
-export const WIDE_QUERY = "(min-width: 900px)";
+export const WIDE_QUERY = "(min-width: 960px)";
 
 export const EXPANDED_KEY = "stallion:toolbar-expanded";
+
+export const MODE_KEY = "stallion:toolbar-mode";
+
+export type ToolbarMode = "Quick" | "Palette";
 
 export type Control =
   | "Sizes"
@@ -16,9 +20,10 @@ export type Control =
   | "Share"
   | "Level"
   | "Connection"
-  | "Expand";
+  | "Expand"
+  | "Flip";
 
-export type ToolbarLayout = "Wide" | "Collapsed" | "Expanded";
+export type ToolbarLayout = "Wide" | "Collapsed" | "Expanded" | "Palette";
 
 const WIDE_ROW: readonly Control[] = [
   "Sizes",
@@ -32,6 +37,7 @@ const WIDE_ROW: readonly Control[] = [
   "Share",
   "Level",
   "Connection",
+  "Flip",
 ];
 
 const COLLAPSED_ROW: readonly Control[] = [
@@ -48,9 +54,24 @@ const EXPANDED_ROWS: readonly (readonly Control[])[] = [
   COLLAPSED_ROW,
   ["Sizes", "Pan", "Select", "Redo", "Share"],
   ["Colours", "Swap"],
+  ["Flip"],
 ];
 
-export const toolbarLayout = (wide: boolean, expanded: boolean): ToolbarLayout => {
+const PALETTE_ROWS: readonly (readonly Control[])[] = [
+  ["Flip", "Connection"],
+  ["Sizes"],
+  ["Colours"],
+  ["Swap", "Pan", "Select", "Eraser"],
+  ["Undo", "Redo"],
+  ["Level", "Share"],
+];
+
+export const toolbarLayout = (
+  mode: ToolbarMode,
+  wide: boolean,
+  expanded: boolean,
+): ToolbarLayout => {
+  if (mode === "Palette") return "Palette";
   if (wide) return "Wide";
   return expanded ? "Expanded" : "Collapsed";
 };
@@ -58,6 +79,7 @@ export const toolbarLayout = (wide: boolean, expanded: boolean): ToolbarLayout =
 export const toolbarRows = (layout: ToolbarLayout): readonly (readonly Control[])[] => {
   if (layout === "Wide") return [WIDE_ROW];
   if (layout === "Collapsed") return [COLLAPSED_ROW];
+  if (layout === "Palette") return PALETTE_ROWS;
   return EXPANDED_ROWS;
 };
 
@@ -77,6 +99,22 @@ export const loadExpanded = (store: () => Store): boolean => {
 export const saveExpanded = (store: () => Store, expanded: boolean): void => {
   try {
     store().setItem(EXPANDED_KEY, expanded ? "1" : "0");
+  } catch {
+    return;
+  }
+};
+
+export const loadMode = (store: () => Store): ToolbarMode => {
+  try {
+    return store().getItem(MODE_KEY) === "Palette" ? "Palette" : "Quick";
+  } catch {
+    return "Quick";
+  }
+};
+
+export const saveMode = (store: () => Store, mode: ToolbarMode): void => {
+  try {
+    store().setItem(MODE_KEY, mode);
   } catch {
     return;
   }
