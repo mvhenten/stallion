@@ -34,3 +34,12 @@ export const accessHeaders = () => {
   if (!id || !secret) return {};
   return { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret };
 };
+
+export const routeAccessHeaders = async (context, origin) => {
+  const headers = accessHeaders();
+  if (Object.keys(headers).length === 0) return;
+  await context.route(
+    (url) => url.origin === origin,
+    (route) => route.continue({ headers: { ...route.request().headers(), ...headers } }),
+  );
+};

@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { accessHeaders } from "./env.mjs";
+import { routeAccessHeaders } from "./env.mjs";
 
 const DEV_ORIGIN = "http://100.104.44.51:5173";
 
@@ -195,8 +195,8 @@ const smokeScheme = async ({ browser, devices, analyser, url, scheme, dir }) => 
   const context = await browser.newContext({
     ...devices[DEVICE],
     colorScheme: scheme,
-    extraHTTPHeaders: accessHeaders(),
   });
+  await routeAccessHeaders(context, new URL(url).origin);
   const page = await context.newPage();
   const problems = watchPage(page, url);
   const shot = async (name, clip) => {
@@ -258,8 +258,8 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
   const context = await browser.newContext({
     ...devices[DEVICE],
     colorScheme: "light",
-    extraHTTPHeaders: accessHeaders(),
   });
+  await routeAccessHeaders(context, new URL(url).origin);
   const page = await context.newPage();
   const problems = watchPage(page, url);
   const check = () => {

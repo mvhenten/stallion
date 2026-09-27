@@ -5,7 +5,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { accessHeaders } from "./env.mjs";
+import { routeAccessHeaders } from "./env.mjs";
 
 const ROOT = join(homedir(), "development", ".tmp", "stallion-duo");
 const VIEWPORT = { width: 1280, height: 800 };
@@ -210,10 +210,12 @@ const main = async () => {
   const contextOptions = {
     viewport: VIEWPORT,
     recordVideo: { dir: raw, size: VIEWPORT },
-    extraHTTPHeaders: accessHeaders(),
   };
   const contextA = await browser.newContext(contextOptions);
   const contextB = await browser.newContext(contextOptions);
+  const origin = new URL(url).origin;
+  await routeAccessHeaders(contextA, origin);
+  await routeAccessHeaders(contextB, origin);
   const a = await contextA.newPage();
   const b = await contextB.newPage();
   const problemsA = watchPage("A", a, url);
