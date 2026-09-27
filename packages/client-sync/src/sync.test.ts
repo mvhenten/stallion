@@ -282,3 +282,64 @@ test("undo of a cross-tile move returns the object to its original tile in one m
   }
   expect([alice.history.canUndo, alice.history.canRedo]).toEqual([true, true]);
 });
+
+test("a stroke erased while another client looked away is gone when it looks back", async () => {
+  const server = new TestServer();
+  const alice = open(server);
+  const bob = open(server);
+  await until(() => alice.status === "Open" && bob.status === "Open", "both sockets");
+  await settle();
+  alice.put(stroke("erased"));
+  await until(() => bob.objects.has("erased"), "bob sees the stroke");
+  await settle();
+
+  bob.setView(FAR, 1);
+  await until(() => !bob.objects.has("erased"), "bob looked away");
+  alice.remove("erased");
+  await until(() => server.objectIds(TILE).length === 0, "the server applied the erase");
+  bob.setView(VIEW, 1);
+  await settle();
+  await settle();
+
+  expect(bob.objects.has("erased")).toBe(false);
+});
+
+test("a stroke erased while another client was disconnected is gone after it reconnects", async () => {
+  const server = new TestServer();
+  let refuse = false;
+  let bobSocket: ReturnType<TestServer["connect"]> | undefined;
+  const alice = open(server);
+  const bob = openBoard("ws://test", "board", {
+    connect: (url, handlers) => {
+      if (refuse) {
+        setTimeout(() => handlers.close(), 0);
+        return { send: () => {}, close: () => {} };
+      }
+      bobSocket = server.connect(url, handlers);
+      return bobSocket;
+    },
+    fetch: server.fetch,
+    passes: memoryPasses(),
+    cache: { name: `sync-test-${databases++}` },
+    backoff: { initialMs: 5, maxMs: 20 },
+    onError: () => {},
+  });
+  bob.setView(VIEW, 1);
+  boards.push(bob);
+  await until(() => alice.status === "Open" && bob.status === "Open", "both sockets");
+  await settle();
+  alice.put(stroke("erased"));
+  await until(() => bob.objects.has("erased"), "bob sees the stroke");
+
+  refuse = true;
+  bobSocket?.close();
+  await until(() => bob.status !== "Open", "bob disconnected");
+  alice.remove("erased");
+  await until(() => server.objectIds(TILE).length === 0, "the server applied the erase");
+  refuse = false;
+  await until(() => bob.status === "Open", "bob reconnected");
+  await settle();
+  await settle();
+
+  expect(bob.objects.has("erased")).toBe(false);
+});

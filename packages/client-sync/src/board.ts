@@ -32,7 +32,7 @@ import {
   encodeAwarenessUpdate,
   removeAwarenessStates,
 } from "y-protocols/awareness";
-import { readSyncMessage, writeUpdate } from "y-protocols/sync";
+import { readSyncMessage, writeSyncStep1, writeUpdate } from "y-protocols/sync";
 import * as Y from "yjs";
 import {
   type BoardLock,
@@ -339,6 +339,17 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     send(BOARD_KEY, "View", viewCodec.encode({ ...viewport, zoom }));
   };
 
+  // The server's View answer skips tiles that hold no objects, so a tile whose last object was
+  // removed elsewhere only reaches a client that still holds it through this step 1.
+  const requestSync = (entry: TileEntry): void => {
+    if (status !== "Open" || !subscribed(entry)) return;
+    send(
+      entry.key,
+      "Sync",
+      syncPayload((encoder) => writeSyncStep1(encoder, entry.doc)),
+    );
+  };
+
   const loadCached = (): void => {
     const target = view;
     if (!target) return;
@@ -346,7 +357,10 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
       const found = await cache.load([...target.tiles.live, ...target.tiles.snapshot]);
       for (const { tile, state } of found) {
         if (view !== target || !inView(tile)) continue;
-        Y.applyUpdate(entryFor(tile).doc, state, CACHED);
+        const fresh = !entries.has(tileKey(tile));
+        const entry = entryFor(tile);
+        Y.applyUpdate(entry.doc, state, CACHED);
+        if (fresh) requestSync(entry);
       }
     }, "Could not load cached tiles");
   };
@@ -536,6 +550,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
         failedHandshakes = 0;
         setStatus("Open");
         sendView();
+        for (const entry of entries.values()) requestSync(entry);
         if (awareness.getLocalState() !== null) {
           send(BOARD_KEY, "Awareness", encodeAwarenessUpdate(awareness, [awareness.clientID]));
         }
@@ -579,6 +594,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   );
 
   const setView = (viewport: BBox, zoom: number): void => {
+    const wasLive = new Set([...entries.values()].filter((entry) => isLive(entry.tile)));
     view = { viewport, zoom, tiles: viewTiles(viewport, zoom) };
     for (const entry of [...entries.values()]) {
       if (!inView(entry.tile)) {
@@ -588,6 +604,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
       if (!isLive(entry.tile)) entry.explicit = false;
     }
     sendView();
+    for (const entry of entries.values()) if (!wasLive.has(entry)) requestSync(entry);
     loadCached();
   };
 
