@@ -73,10 +73,14 @@ resource "cloudflare_zero_trust_access_policy" "automation" {
 }
 
 resource "cloudflare_zero_trust_access_application" "stallion" {
-  account_id                = var.account_id
-  name                      = "stallion"
-  type                      = "self_hosted"
-  domain                    = var.app_domain
+  account_id = var.account_id
+  name       = "stallion"
+  type       = "self_hosted"
+  domain     = var.app_domains[0]
+  destinations = [for host in var.app_domains : {
+    type = "public"
+    uri  = host
+  }]
   session_duration          = "720h"
   auto_redirect_to_identity = true
   enable_binding_cookie     = false
