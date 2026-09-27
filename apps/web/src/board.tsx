@@ -5,6 +5,8 @@ import { myBoardsForPage, thumbnailUploader } from "./my-boards";
 import { PinPrompt } from "./pin-prompt";
 import type { Presence } from "./presence";
 import { loadRecents, renameRecent, saveRecents, upsertRecent } from "./recents";
+import { useConnectionNotice } from "./reconnect";
+import { ReconnectNotice } from "./reconnect-notice";
 import { errorMessage, reportLink } from "./report";
 import { boardLink, SharePanel } from "./share";
 import { createSurface, type Surface, type SurfaceView, type Tool, type ToolMode } from "./surface";
@@ -65,6 +67,15 @@ export function Board({ boardId }: { boardId: string }) {
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const closeShare = useCallback(() => setShareOpen(false), []);
+  const checkAuthExpired = useCallback(async () => {
+    const result = await myBoardsForPage()?.list();
+    return (
+      result !== undefined &&
+      !result.ok &&
+      (result.reason === "Http401" || result.reason === "Http403")
+    );
+  }, []);
+  const notice = useConnectionNotice(connection, checkAuthExpired);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -210,6 +221,10 @@ export function Board({ boardId }: { boardId: string }) {
         onShare={() => setShareOpen(!shareOpen)}
         presence={presence}
         onFollow={(clientId) => surfaceRef.current?.follow(clientId)}
+      />
+      <ReconnectNotice
+        notice={notice}
+        reconnectMessage="Can't reach the board. Your strokes are kept and sent when it reconnects."
       />
       {shareOpen && (
         <SharePanel

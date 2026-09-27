@@ -5,6 +5,8 @@ import { boardPath } from "./board-path";
 import { randomBoardId } from "./id";
 import { followBoards, myBoardsForPage, syncBoards } from "./my-boards";
 import { loadRecents, type RecentBoard, removeRecent, renameRecent, saveRecents } from "./recents";
+import { useConnectionNotice } from "./reconnect";
+import { ReconnectNotice } from "./reconnect-notice";
 import { reportLink } from "./report";
 import { CONNECTION_LABEL, type Connection, connectionFor } from "./sync";
 
@@ -45,7 +47,11 @@ function RemoteNotice({ remote }: { remote: Remote }) {
     return (
       <div class="landing-alert" role="alert">
         <p>Your sign-in has expired, so your boards from other devices are missing.</p>
-        <button type="button" class="action" onClick={() => window.location.reload()}>
+        <button
+          type="button"
+          class="action"
+          onClick={() => window.location.assign(window.location.href)}
+        >
           Sign in again
         </button>
       </div>
@@ -101,6 +107,7 @@ export function Landing() {
   );
   const recentsRef = useRef(recents);
   recentsRef.current = recents;
+  const notice = useConnectionNotice(connection);
 
   useEffect(() => {
     if (!api) return;
@@ -192,6 +199,10 @@ export function Landing() {
           New board
         </button>
       </header>
+      <ReconnectNotice
+        notice={notice}
+        reconnectMessage="Can't reach the server. Your boards stay on this device until it reconnects."
+      />
       <RemoteNotice remote={remote} />
       {recents.length > 0 && (
         <ul class="recents">
