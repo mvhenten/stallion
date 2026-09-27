@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ACCESS_ENV, CF_ENV, CONFIG_DIR, readEnvFile } from "./env.mjs";
+import { ACCESS_ENV, CF_ENV, CONFIG_DIR, readEnvFile, TOFU_INIT } from "./env.mjs";
 
 const infraDir = join(dirname(fileURLToPath(import.meta.url)), "..", "infra");
 const env = { ...process.env, ...readEnvFile(CF_ENV) };
@@ -17,7 +17,7 @@ const tofu = (...args) => {
   return run.stdout.trim();
 };
 
-tofu("init", "-input=false");
+tofu(...TOFU_INIT);
 const id = tofu("output", "-raw", "access_client_id");
 const secret = tofu("output", "-raw", "access_client_secret");
 if (!id || !secret) {

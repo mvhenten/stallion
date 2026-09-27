@@ -5,6 +5,13 @@ import { join } from "node:path";
 export const CONFIG_DIR = join(homedir(), ".config", "stallion");
 export const CF_ENV = join(CONFIG_DIR, "cf-env");
 export const ACCESS_ENV = join(CONFIG_DIR, "access-env");
+export const TFSTATE = join(CONFIG_DIR, "terraform.tfstate");
+export const TOFU_INIT = [
+  "init",
+  "-input=false",
+  "-reconfigure",
+  `-backend-config=path=${TFSTATE}`,
+];
 
 export const parseEnv = (text) =>
   Object.fromEntries(

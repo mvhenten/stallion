@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CF_ENV, readEnvFile } from "./env.mjs";
+import { writeAccessVars } from "./access-vars.mjs";
+import { CF_ENV, readEnvFile, TOFU_INIT } from "./env.mjs";
 
 const infraDir = join(dirname(fileURLToPath(import.meta.url)), "..", "infra");
 const [command, ...args] = process.argv.slice(2);
@@ -24,5 +25,6 @@ const tofu = (...tofuArgs) => {
   if (run.status !== 0) process.exit(run.status ?? 1);
 };
 
-tofu("init", "-input=false");
+tofu(...TOFU_INIT);
 tofu(command, "-input=false", ...args);
+if (command === "apply") writeAccessVars(env);

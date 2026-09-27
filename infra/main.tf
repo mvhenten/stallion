@@ -8,9 +8,7 @@ terraform {
     }
   }
 
-  backend "local" {
-    path = "terraform.tfstate"
-  }
+  backend "local" {}
 }
 
 provider "cloudflare" {}
@@ -57,6 +55,10 @@ resource "cloudflare_zero_trust_access_service_token" "automation" {
   account_id = var.account_id
   name       = "stallion-automation"
   duration   = "8760h"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_policy" "automation" {

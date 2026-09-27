@@ -11,14 +11,13 @@ if (process.env.WORKERS_CI !== "1") {
 }
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const state = JSON.parse(readFileSync(join(root, "infra", "terraform.tfstate"), "utf8"));
-const output = (name) => {
-  const value = state.outputs?.[name]?.value;
-  if (!value) {
-    console.error(`infra/terraform.tfstate has no ${name} output; run npm run infra:apply`);
+const vars = JSON.parse(readFileSync(join(root, "infra", "access.json"), "utf8"));
+const value = (name) => {
+  if (!vars[name]) {
+    console.error(`infra/access.json has no ${name}; run npm run infra:apply`);
     process.exit(1);
   }
-  return value;
+  return vars[name];
 };
 
 const run = spawnSync(
@@ -27,9 +26,9 @@ const run = spawnSync(
     "wrangler",
     "deploy",
     "--var",
-    `ACCESS_TEAM_DOMAIN:${output("access_team_domain")}`,
+    `ACCESS_TEAM_DOMAIN:${value("ACCESS_TEAM_DOMAIN")}`,
     "--var",
-    `ACCESS_AUD:${output("access_aud")}`,
+    `ACCESS_AUD:${value("ACCESS_AUD")}`,
   ],
   { cwd: root, stdio: "inherit" },
 );
