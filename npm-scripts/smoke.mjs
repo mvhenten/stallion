@@ -274,6 +274,8 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
   try {
     await page.goto(url, { waitUntil: "load" });
     await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
     await page.locator("[data-toolbar-flip]").tap();
     await page.locator(PALETTE).waitFor({ state: "visible", timeout: 5000 });
     await page.reload({ waitUntil: "load" });
@@ -297,14 +299,24 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
     const ink = await inkStats(analyser, blank.buffer, drawn.buffer);
     if (ink.changedRatio < MIN_INK_RATIO)
       fail("palette: stroke drawn from the palette did not show");
-    const rowsAfter = totalRows(await countStoredRows(page));
-    if (rowsAfter <= rowsBefore) {
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1000);
+    const counts = await countStoredRows(page);
+    const rowsAfter = totalRows(counts);
+    if (rowsAfter === 0) fail("palette: nothing stored in IndexedDB after reload");
+    if ((counts.objects ?? 0) > 0 && rowsAfter <= rowsBefore) {
       fail(`palette: stroke not stored, ${rowsBefore} rows before and ${rowsAfter} after`);
     }
+    if (!(await page.locator(PALETTE).isVisible())) fail("palette: closed after the second reload");
+    const reloaded = await shot("reloaded", clip);
+    const kept = await inkStats(analyser, blank.buffer, reloaded.buffer);
+    if (kept.changedRatio < MIN_INK_RATIO) fail("palette: stroke gone after reload");
     check();
     return {
       ink: Number(ink.changedRatio.toFixed(3)),
-      screenshots: [blank.path, drawn.path, full.path],
+      screenshots: [blank.path, drawn.path, full.path, reloaded.path],
     };
   } finally {
     await context.close();
