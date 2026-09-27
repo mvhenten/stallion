@@ -247,7 +247,7 @@ export function Board({ boardId }: { boardId: string }) {
           }
         />
       )}
-      {error && (
+      {error && notice === "None" && (
         <div class="error" role="alert">
           <p>{error}. Strokes may not be saved; reload to try again.</p>
           <a href={reportLink(error)} target="_blank" rel="noreferrer">
