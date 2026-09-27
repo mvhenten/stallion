@@ -175,3 +175,20 @@ describe("followBoards", () => {
     expect(statuses).toEqual(["Connecting", "Open"]);
   });
 });
+
+describe("myBoards list", () => {
+  it("reports an Access login redirect as AuthRedirect instead of following it", async () => {
+    const inits: (RequestInit | undefined)[] = [];
+    const api = myBoards("wss://stallion.test", {
+      fetch: (_input, init) => {
+        inits.push(init);
+        return Promise.resolve(
+          Object.defineProperty(Response.error(), "type", { value: "opaqueredirect" }),
+        );
+      },
+    });
+    const listed = await api.list();
+    expect(inits[0]?.redirect).toBe("manual");
+    expect(listed).toMatchObject({ ok: false, reason: "AuthRedirect" });
+  });
+});

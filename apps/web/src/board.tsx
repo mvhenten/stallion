@@ -72,7 +72,9 @@ export function Board({ boardId }: { boardId: string }) {
     return (
       result !== undefined &&
       !result.ok &&
-      (result.reason === "Http401" || result.reason === "Http403")
+      (result.reason === "AuthRedirect" ||
+        result.reason === "Http401" ||
+        result.reason === "Http403")
     );
   }, []);
   const notice = useConnectionNotice(connection, checkAuthExpired);

@@ -94,6 +94,11 @@ const boardsPushOf = (bytes: Uint8Array): BoardsPush | undefined => {
   return { rows: boards, thumbnails };
 };
 
+const authRedirect: Refusal = {
+  reason: "AuthRedirect",
+  message: "the sign-in expired: Access redirected the request to its login page",
+};
+
 const malformed = (what: string): Refusal => ({
   reason: "MalformedResponse",
   message: `the server sent a malformed ${what}`,
@@ -108,10 +113,12 @@ export const myBoards = (url: string, options: MyBoardsOptions = {}): MyBoards =
     boardId: string | undefined,
     init?: RequestInit,
   ): Promise<{ ok: true; body: unknown } | ({ ok: false } & Refusal)> => {
-    const response = await fetchJson(myBoardsEndpoint(url, boardId), init).catch(
-      (error: unknown) => ({ error }),
-    );
+    const response = await fetchJson(myBoardsEndpoint(url, boardId), {
+      ...init,
+      redirect: "manual",
+    }).catch((error: unknown) => ({ error }));
     if ("error" in response) return { ok: false, ...networkRefusal(response.error) };
+    if (response.type === "opaqueredirect") return { ok: false, ...authRedirect };
     const body = response.status === 204 ? undefined : await readJson(response);
     if (!response.ok) return { ok: false, ...refusalOf(response, body) };
     return { ok: true, body };
