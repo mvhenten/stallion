@@ -6,6 +6,7 @@ export {
   HANDSHAKE_FAILURES_REPORTED,
   type History,
   isBoardId,
+  type LiveHints,
   type LiveObjects,
   openBoard,
   type SocketHandlers,

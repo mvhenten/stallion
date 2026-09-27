@@ -1,5 +1,6 @@
 use std::cell::Cell;
 
+use serde::Serialize;
 use worker::{SqlStorage, SqlStorageValue};
 
 use crate::object::Bbox;
@@ -22,6 +23,14 @@ pub struct TileSnapshot {
     pub objects: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TileHint {
+    pub level: i32,
+    pub tx: i64,
+    pub ty: i64,
+    pub count: i64,
+}
+
 pub trait TileStore {
     fn load(&self, coord: TileCoord) -> Result<Option<Vec<u8>>, String>;
     /// Writes every record or none. The Durable Object commits the synchronous writes of one
@@ -37,6 +46,13 @@ pub trait TileStore {
         center: (i64, i64),
         budget: usize,
     ) -> Result<Vec<TileSnapshot>, String>;
+    /// Object counts per tile in `range`, nearest to `center` first, at most `cap` tiles.
+    fn hints(
+        &self,
+        range: &LevelRange,
+        center: (i64, i64),
+        cap: usize,
+    ) -> Result<Vec<TileHint>, String>;
 }
 
 const RANGE_QUERY: &str = "SELECT c.tx, c.ty, t.doc_state, c.n FROM (
@@ -51,6 +67,40 @@ const RANGE_QUERY: &str = "SELECT c.tx, c.ty, t.doc_state, c.n FROM (
     JOIN tile t ON t.level = ? AND t.tx = c.tx AND t.ty = c.ty
     WHERE c.running <= ?
     ORDER BY c.running";
+
+pub const HINTS_QUERY: &str = "SELECT level, tx, ty, COUNT(*) AS n
+    FROM object_index
+    WHERE level = ? AND tx BETWEEN ? AND ? AND ty BETWEEN ? AND ?
+    GROUP BY level, tx, ty
+    ORDER BY MAX(ABS(tx - ?), ABS(ty - ?)), ty, tx
+    LIMIT ?";
+
+pub fn hints_bindings(
+    range: &LevelRange,
+    (cx, cy): (i64, i64),
+    cap: usize,
+) -> Result<[i64; 8], String> {
+    Ok([
+        i64::from(range.level),
+        range.min_tx,
+        range.max_tx,
+        range.min_ty,
+        range.max_ty,
+        cx,
+        cy,
+        i64::try_from(cap).map_err(|e| e.to_string())?,
+    ])
+}
+
+pub fn hint_from_row(row: [i64; 4]) -> Result<TileHint, String> {
+    let [level, tx, ty, count] = row;
+    Ok(TileHint {
+        level: i32::try_from(level).map_err(|e| e.to_string())?,
+        tx,
+        ty,
+        count,
+    })
+}
 
 pub const MIGRATIONS: &[&[&str]] = &[
     &[
@@ -257,6 +307,42 @@ impl TileStore for SqlTileStore {
         }
     }
 
+    fn hints(
+        &self,
+        range: &LevelRange,
+        center: (i64, i64),
+        cap: usize,
+    ) -> Result<Vec<TileHint>, String> {
+        self.migrate()?;
+        let bindings: Vec<SqlStorageValue> = hints_bindings(range, center, cap)?
+            .into_iter()
+            .map(SqlStorageValue::from)
+            .collect();
+        let cursor = self
+            .sql
+            .exec(HINTS_QUERY, bindings)
+            .map_err(|e| e.to_string())?;
+        let mut hints = Vec::new();
+        for row in cursor.raw() {
+            let row = row.map_err(|e| e.to_string())?;
+            let [
+                SqlStorageValue::Integer(level),
+                SqlStorageValue::Integer(tx),
+                SqlStorageValue::Integer(ty),
+                SqlStorageValue::Integer(count),
+            ] = <[SqlStorageValue; 4]>::try_from(row)
+                .map_err(|row| format!("hints query returned {row:?}"))?
+            else {
+                return Err(format!(
+                    "hints query at level {} returned a malformed row",
+                    range.level
+                ));
+            };
+            hints.push(hint_from_row([level, tx, ty, count])?);
+        }
+        Ok(hints)
+    }
+
     fn range(
         &self,
         range: &LevelRange,
@@ -303,5 +389,87 @@ impl TileStore for SqlTileStore {
             });
         }
         Ok(tiles)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use crate::view::HINT_CAP;
+    use rusqlite::Connection;
+
+    fn seeded(objects: &[(TileCoord, usize)]) -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        for step in MIGRATIONS.iter().flat_map(|steps| steps.iter()) {
+            db.execute(step, []).unwrap();
+        }
+        for &((level, tx, ty), count) in objects {
+            for i in 0..count {
+                db.execute(
+                    "INSERT INTO object_index (level, tx, ty, object_id, bbox) VALUES (?, ?, ?, ?, '[0,0,1,1]')",
+                    rusqlite::params![level, tx, ty, format!("o{level}:{tx}:{ty}:{i}")],
+                )
+                .unwrap();
+            }
+        }
+        db
+    }
+
+    fn hints(db: &Connection, range: &LevelRange, center: (i64, i64), cap: usize) -> Vec<TileHint> {
+        let bindings = hints_bindings(range, center, cap).unwrap();
+        let mut statement = db.prepare(HINTS_QUERY).unwrap();
+        statement
+            .query_map(rusqlite::params_from_iter(bindings), |row| {
+                Ok([row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?])
+            })
+            .unwrap()
+            .map(|row| hint_from_row(row.unwrap()).unwrap())
+            .collect()
+    }
+
+    const RANGE: LevelRange = LevelRange {
+        level: -9,
+        min_tx: 0,
+        min_ty: 0,
+        max_tx: 99,
+        max_ty: 99,
+    };
+
+    #[test]
+    fn hints_count_objects_per_tile_at_one_level_inside_the_range() {
+        let db = seeded(&[
+            ((-9, 10, 10), 3),
+            ((-9, 12, 10), 1),
+            ((-9, 200, 10), 5),
+            ((-10, 10, 10), 7),
+            ((-8, 5, 5), 2),
+        ]);
+        let hint = |tx, ty, count| TileHint {
+            level: -9,
+            tx,
+            ty,
+            count,
+        };
+        assert_eq!(
+            hints(&db, &RANGE, (10, 10), HINT_CAP),
+            [hint(10, 10, 3), hint(12, 10, 1)]
+        );
+    }
+
+    #[test]
+    fn hints_keep_the_tiles_nearest_the_centre_up_to_the_cap() {
+        let tiles: Vec<(TileCoord, usize)> = (0..100)
+            .flat_map(|tx| (0..30).map(move |ty| ((-9, tx, ty), 1)))
+            .collect();
+        let db = seeded(&tiles);
+        let all = hints(&db, &RANGE, (50, 15), HINT_CAP);
+        assert_eq!(all.len(), HINT_CAP);
+        let ring = |h: &TileHint| (h.tx - 50).abs().max((h.ty - 15).abs());
+        assert!(all.windows(2).all(|w| ring(&w[0]) <= ring(&w[1])));
+        assert!(all.iter().all(|h| ring(h) <= 35));
+
+        let few = hints(&db, &RANGE, (50, 15), 9);
+        assert_eq!(few.len(), 9);
+        assert!(few.iter().all(|h| ring(h) <= 1), "{few:?}");
     }
 }

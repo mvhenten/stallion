@@ -80,6 +80,7 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     commit: () => undefined,
     erase: () => undefined,
     objects,
+    hints: { current: [], observe: () => () => undefined },
     history: {
       undo: () => undefined,
       redo: () => undefined,

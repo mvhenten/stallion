@@ -8,8 +8,8 @@ use yrs::updates::encoder::Encode;
 use yrs::{Any, ClientID, Doc, Map, Out, ReadTxn, StateVector, Transact, Update};
 
 use crate::frame::{BOARD_KEY, Frame, FrameKind, Move, parse_tile_key};
-use crate::store::{TileCoord, TileRecord, TileStore};
-use crate::view::{OBJECT_BUDGET, Viewport};
+use crate::store::{TileCoord, TileHint, TileRecord, TileStore};
+use crate::view::{HINT_CAP, OBJECT_BUDGET, Viewport};
 
 pub const OBJECTS: &str = "objects";
 
@@ -219,7 +219,7 @@ impl<S: TileStore> BoardSync<S> {
             }
             FrameKind::View => self.view(session, Viewport::decode(&frame.payload)?),
             FrameKind::Move => self.move_object(session, Move::decode(&frame.payload)?),
-            FrameKind::Reject | FrameKind::Snapshot => {
+            FrameKind::Reject | FrameKind::Snapshot | FrameKind::Hints => {
                 Err(format!("clients cannot send {:?}", frame.kind))
             }
         }
@@ -263,6 +263,15 @@ impl<S: TileStore> BoardSync<S> {
                 outgoing.push(reply(Frame::new(key, FrameKind::Sync, step2)));
             }
         }
+        let hints = match &tiles.hint {
+            Some(range) => self.store.hints(range, range.center(), HINT_CAP)?,
+            None => Vec::new(),
+        };
+        outgoing.push(reply(Frame::new(
+            BOARD_KEY,
+            FrameKind::Hints,
+            encode_hints(&hints),
+        )));
         Ok(outgoing)
     }
 
@@ -526,6 +535,12 @@ fn validate_entry(object_id: &str, value: &Out) -> Result<(), String> {
     Ok(())
 }
 
+fn encode_hints(hints: &[TileHint]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    ciborium::into_writer(hints, &mut bytes).expect("writing to a Vec cannot fail");
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -601,6 +616,33 @@ mod tests {
                 })
                 .collect())
         }
+
+        fn hints(
+            &self,
+            range: &LevelRange,
+            (cx, cy): (i64, i64),
+            cap: usize,
+        ) -> Result<Vec<TileHint>, String> {
+            let rows = self.rows.borrow();
+            let mut found: Vec<&TileRecord> = rows
+                .values()
+                .filter(|r| range.contains(r.coord) && !r.objects.is_empty())
+                .collect();
+            found.sort_by_key(|r| {
+                let (_, tx, ty) = r.coord;
+                ((tx - cx).abs().max((ty - cy).abs()), ty, tx)
+            });
+            Ok(found
+                .into_iter()
+                .take(cap)
+                .map(|r| TileHint {
+                    level: r.coord.0,
+                    tx: r.coord.1,
+                    ty: r.coord.2,
+                    count: r.objects.len() as i64,
+                })
+                .collect())
+        }
     }
 
     fn view_frame(min_x: f64, min_y: f64, zoom: f64) -> Frame {
@@ -665,6 +707,9 @@ mod tests {
         let mut delivered: BTreeSet<TileCoord> = BTreeSet::new();
         for o in &out {
             assert_eq!(o.route, Route::Sender);
+            if o.frame.kind == FrameKind::Hints {
+                continue;
+            }
             delivered.insert(parse_tile_key(&o.frame.tile_key).unwrap());
         }
         let total: usize = delivered.iter().map(|c| rows[c].objects.len()).sum();
@@ -696,13 +741,27 @@ mod tests {
     fn a_view_subscribes_the_live_band_and_drops_tiles_that_left_it() {
         let store = MemoryStore::default();
         seed(&store, (0, 1, 1), 1);
+        seed(&store, (-9, 3, 3), 2);
+        seed(&store, (-10, 3, 3), 4);
         let mut board = BoardSync::new(|| 0, store);
         let mut session = Session::default();
         session.tiles.insert("0:1000:1000".into());
         let first = board
             .receive(&mut session, view_frame(0.0, 0.0, 1.0))
             .unwrap();
-        assert_eq!(first.len(), 2, "step 1 and step 2 for the one live tile");
+        assert_eq!(
+            first.len(),
+            3,
+            "step 1 and step 2 for the one live tile, then hints"
+        );
+        let hints = &first[2].frame;
+        assert_eq!(hints.kind, FrameKind::Hints);
+        let decoded: Vec<ciborium::Value> = ciborium::from_reader(&hints.payload[..]).unwrap();
+        assert_eq!(
+            decoded,
+            [hint_value(-9, 3, 3, 2)],
+            "only the level below the cutoff"
+        );
 
         assert!(session.subscribed("-2:16:12"));
         assert!(session.subscribed("40:0:0"));
@@ -717,13 +776,27 @@ mod tests {
         let again = board
             .receive(&mut session, view_frame(0.0, 0.0, 1.0))
             .unwrap();
-        assert!(again.is_empty(), "a live tile was resent: {again:?}");
+        let kinds: Vec<FrameKind> = again.iter().map(|o| o.frame.kind).collect();
+        assert_eq!(
+            kinds,
+            [FrameKind::Hints],
+            "a live tile was resent: {again:?}"
+        );
 
         board
             .receive(&mut session, view_frame(1e6, 1e6, 1.0))
             .unwrap();
         assert!(!session.subscribed("0:1:1"));
         assert!(session.subscribed("0:3907:3907"));
+    }
+
+    fn hint_value(level: i64, tx: i64, ty: i64, count: i64) -> ciborium::Value {
+        ciborium::Value::Map(
+            [("level", level), ("tx", tx), ("ty", ty), ("count", count)]
+                .into_iter()
+                .map(|(k, v)| (ciborium::Value::Text(k.into()), v.into()))
+                .collect(),
+        )
     }
 
     fn board() -> BoardSync<MemoryStore> {

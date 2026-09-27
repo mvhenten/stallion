@@ -10,6 +10,7 @@ export const frameKind = z.enum([
   "View",
   "Snapshot",
   "Move",
+  "Hints",
 ]);
 
 export const frame = z.strictObject({
@@ -66,6 +67,33 @@ export const encodeMove = (value: Move): Uint8Array =>
 
 export const decodeMove = (bytes: Uint8Array): MoveResult => {
   const parsed = move.safeParse(cbor.decode(bytes));
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.message };
+  }
+  return { ok: true, value: parsed.data };
+};
+
+const tileIndex = z
+  .union([z.int(), z.bigint()])
+  .transform(Number)
+  .refine(Number.isSafeInteger, "tile index is not a safe integer");
+
+export const tileHint = z.strictObject({
+  level: z.int(),
+  tx: tileIndex,
+  ty: tileIndex,
+  count: z.int().min(1),
+});
+
+export type TileHint = z.infer<typeof tileHint>;
+
+export type HintsResult = { ok: true; value: TileHint[] } | { ok: false; error: string };
+
+export const encodeHints = (hints: readonly TileHint[]): Uint8Array =>
+  cbor.encode(hints.map(({ level, tx, ty, count }) => ({ level, tx, ty, count })));
+
+export const decodeHints = (bytes: Uint8Array): HintsResult => {
+  const parsed = z.array(tileHint).safeParse(cbor.decode(bytes));
   if (!parsed.success) {
     return { ok: false, error: parsed.error.message };
   }

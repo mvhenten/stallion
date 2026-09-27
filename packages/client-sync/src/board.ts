@@ -16,10 +16,12 @@ import {
   BOARD_KEY,
   decode,
   decodeFrame,
+  decodeHints,
   encode,
   encodeFrame,
   encodeMove,
   type FrameKind,
+  type TileHint,
 } from "@stallion/schema";
 import { Encoder } from "cbor-x";
 import * as decoding from "lib0/decoding";
@@ -62,6 +64,11 @@ export type LiveObjects = ReadonlyMap<string, StoredObject> & {
   observe(listener: (changed: ReadonlySet<string>) => void): () => void;
 };
 
+export type LiveHints = {
+  readonly current: readonly TileHint[];
+  observe(listener: () => void): () => void;
+};
+
 export type BoardStatus = "Connecting" | "Open" | "Offline" | "NeedsPin" | "Closed";
 
 export type BoardError = { tileKey: string; reason: string };
@@ -91,6 +98,7 @@ export type StallionBoard = {
   put(stored: StoredObject): void;
   remove(objectId: string): void;
   readonly objects: LiveObjects;
+  readonly hints: LiveHints;
   readonly history: History;
   readonly awareness: Awareness;
   readonly status: BoardStatus;
@@ -167,6 +175,8 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
   const listeners = new Set<(changed: ReadonlySet<string>) => void>();
   const awareness = new Awareness(new Y.Doc());
   const dirty = new Set<string>();
+  const hintListeners = new Set<() => void>();
+  let currentHints: readonly TileHint[] = [];
 
   let view: View | undefined;
   let socket: ReturnType<Connect> | undefined;
@@ -376,6 +386,16 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     }
     if (kind === "Reject") {
       report(key, new TextDecoder().decode(payload));
+      return;
+    }
+    if (kind === "Hints") {
+      const hinted = decodeHints(payload);
+      if (!hinted.ok) {
+        report(key, `invalid hints: ${hinted.error}`);
+        return;
+      }
+      currentHints = hinted.value;
+      for (const listener of hintListeners) listener();
       return;
     }
     const tile = parseTileKey(key);
@@ -784,9 +804,21 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     socket = undefined;
     for (const entry of [...entries.values()]) drop(entry);
     historyListeners.clear();
+    hintListeners.clear();
+    currentHints = [];
     awareness.destroy();
     await chain;
     (await cacheReady).close();
+  };
+
+  const hints: LiveHints = {
+    get current() {
+      return currentHints;
+    },
+    observe(listener: () => void): () => void {
+      hintListeners.add(listener);
+      return () => hintListeners.delete(listener);
+    },
   };
 
   const objects: LiveObjects = Object.assign(objectMap, {
@@ -810,6 +842,7 @@ export function openBoard(url: string, boardId: string, options: BoardOptions = 
     put,
     remove,
     objects,
+    hints,
     history,
     awareness,
     get status() {

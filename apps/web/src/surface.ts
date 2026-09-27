@@ -1,6 +1,16 @@
 import type { StoredObject } from "@stallion/client-store";
 import { createInkPublisher, createInkReader, type LiveInk } from "@stallion/client-sync";
-import type { Point, Tile } from "@stallion/geometry";
+import {
+  bboxCentre,
+  cull,
+  dedupeMarkers,
+  MARKER_ALPHA,
+  MARKER_PX,
+  type Marker,
+  type Point,
+  type Tile,
+  tileBounds,
+} from "@stallion/geometry";
 import type { PencilSize, Stroke } from "@stallion/schema";
 import { Gesture } from "@use-gesture/vanilla";
 import {
@@ -14,7 +24,6 @@ import {
   zoomAt,
   zoomTo,
 } from "./camera";
-import { isVisible } from "./culling";
 import { hitsStroke } from "./eraser";
 import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
@@ -53,6 +62,8 @@ type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; path: Path2D };
 type Drag = { objectId: string; from: Point; dx: number; dy: number };
 
 const SELECTION = "#0090ff";
+
+export const HINT_GREY = "#8c8c8c";
 
 const BLOCKED_TOUCH_EVENTS = [
   "touchstart",
@@ -179,9 +190,20 @@ export function createSurface(
     ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const view = viewBounds(camera, width, height);
+    const toDevice = (world: Point): Point => ({
+      x: (world.x - camera.x) * camera.zoom * dpr,
+      y: (world.y - camera.y) * camera.zoom * dpr,
+    });
+    const markers: Marker[] = [];
     for (const entry of ordered) {
       const dragged = drag?.objectId === entry.stroke.objectId ? drag : undefined;
-      if (!dragged && !isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
+      const culled = dragged ? "Draw" : cull(entry.stroke.bbox, view, camera.zoom);
+      if (culled === "Skip") continue;
+      if (culled === "Marker") {
+        const style = PALETTE[entry.stroke.colour] ?? PALETTE[0];
+        markers.push({ ...toDevice(bboxCentre(entry.stroke.bbox)), style });
+        continue;
+      }
       const offset = dragged ?? { dx: 0, dy: 0 };
       const { origin } = entry.frame;
       const scale = entry.frame.scale * camera.zoom * dpr;
@@ -196,6 +218,13 @@ export function createSurface(
       ctx.fillStyle = PALETTE[entry.stroke.colour] ?? PALETTE[0];
       ctx.fill(entry.path);
     }
+    renderMarkers(
+      source.hints.current.map((hint) => ({
+        ...toDevice(bboxCentre(tileBounds(hint))),
+        style: HINT_GREY,
+      })),
+    );
+    renderMarkers(markers);
     if (inks.length > 0) renderInks(dpr);
     if (draft && draft.points.length > 0) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -204,6 +233,16 @@ export function createSurface(
     }
     renderSelection(dpr);
     if (cursors.length > 0) renderCursors(dpr);
+  };
+
+  const renderMarkers = (markers: Iterable<Marker>) => {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = MARKER_ALPHA;
+    for (const marker of dedupeMarkers(markers)) {
+      ctx.fillStyle = marker.style;
+      ctx.fillRect(marker.x, marker.y, MARKER_PX, MARKER_PX);
+    }
+    ctx.globalAlpha = 1;
   };
 
   const renderInks = (dpr: number) => {
@@ -281,7 +320,7 @@ export function createSurface(
     const view = viewBounds(camera, width, height);
     const world = screenToWorld(camera, screen);
     for (const entry of ordered) {
-      if (!isVisible(entry.stroke.bbox, view, camera.zoom)) continue;
+      if (cull(entry.stroke.bbox, view, camera.zoom) !== "Draw") continue;
       if (hitsStroke(entry.tile, entry.stroke, world, camera.zoom))
         source.erase(entry.stroke.objectId);
     }
@@ -306,7 +345,7 @@ export function createSurface(
     const world = screenToWorld(camera, screen);
     return ordered.findLast(
       (entry) =>
-        isVisible(entry.stroke.bbox, view, camera.zoom) &&
+        cull(entry.stroke.bbox, view, camera.zoom) === "Draw" &&
         hitsStroke(entry.tile, entry.stroke, world, camera.zoom),
     );
   };
@@ -687,6 +726,7 @@ export function createSurface(
   const preventDefault = (event: Event) => event.preventDefault();
 
   const unobserve = source.objects.observe(onObjects);
+  const unobserveHints = source.hints.observe(requestRender);
   awareness?.on("change", onAwareness);
 
   const observer = new ResizeObserver(() => {
@@ -750,6 +790,7 @@ export function createSurface(
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKey);
       unobserve();
+      unobserveHints();
       awareness?.off("change", onAwareness);
       saveCamera(boardId, camera);
     },

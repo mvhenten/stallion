@@ -2,8 +2,11 @@ import fc from "fast-check";
 import { describe, expect, test } from "vitest";
 import {
   contains,
+  cull,
+  dedupeMarkers,
   fromTileLocal,
   isSubPixel,
+  MARKER_PX,
   MAX_LEVEL,
   MIN_LEVEL,
   nativeLevel,
@@ -125,8 +128,41 @@ describe("view", () => {
     }
   });
 
-  test("culls objects below one pixel", () => {
+  test("flags objects below one pixel", () => {
     expect(isSubPixel(bbox(0, 0, 0.5, 0.5), zoom)).toBe(true);
     expect(isSubPixel(bbox(0, 0, 0.5, 0.5), 4)).toBe(false);
+  });
+});
+
+describe("culling", () => {
+  const view = bbox(0, 0, 100, 100);
+
+  test("marks an object below one pixel and draws it from one pixel up", () => {
+    expect(cull(bbox(50, 50, 0.999, 0.5), view, 1)).toBe("Marker");
+    expect(cull(bbox(50, 50, 1, 0.5), view, 1)).toBe("Draw");
+    expect(cull(bbox(50, 50, 1.5, 1.5), view, 1)).toBe("Draw");
+    expect(cull(bbox(50, 50, 0.5, 0.5), view, 2)).toBe("Draw");
+    expect(cull(bbox(50, 50, 0, 0), view, 1)).toBe("Marker");
+  });
+
+  test("skips an object outside the view and keeps one touching its edge", () => {
+    expect(cull(bbox(101, 10, 20, 20), view, 1)).toBe("Skip");
+    expect(cull(bbox(101, 10, 0.1, 0.1), view, 1)).toBe("Skip");
+    expect(cull(bbox(100, 10, 20, 20), view, 1)).toBe("Draw");
+    expect(cull(bbox(-1e9, -1e9, 2e9, 2e9), view, 1)).toBe("Draw");
+  });
+
+  test("a cluster inside one screen pixel is one marker", () => {
+    const markers = dedupeMarkers([
+      { x: 10.1, y: 20.2, style: "a" },
+      { x: 11.9, y: 21.9, style: "b" },
+      { x: 12, y: 20, style: "c" },
+      { x: -0.5, y: 0, style: "d" },
+    ]);
+    expect(markers).toEqual([
+      { x: 10, y: 20, style: "b" },
+      { x: 12, y: 20, style: "c" },
+      { x: -MARKER_PX, y: 0, style: "d" },
+    ]);
   });
 });

@@ -9,6 +9,7 @@ pub const LIVE_TILE_MIN_PX: f64 = 64.0;
 pub const SUB_PIXEL_PX: f64 = 1.0;
 
 pub const OBJECT_BUDGET: usize = 4096;
+pub const HINT_CAP: usize = 2048;
 pub const MAX_VIEW_PX: f64 = 16384.0;
 const MAX_SAFE_INDEX: f64 = 9_007_199_254_740_991.0;
 
@@ -69,6 +70,7 @@ impl LevelRange {
 pub struct ViewTiles {
     pub live: Vec<LevelRange>,
     pub snapshot: Vec<LevelRange>,
+    pub hint: Option<LevelRange>,
 }
 
 pub fn clamp_level(level: f64) -> i32 {
@@ -159,11 +161,18 @@ impl Viewport {
 
     pub fn tiles(&self) -> Result<ViewTiles, String> {
         let live_from = finest_live_level(self.zoom);
+        let finest = finest_level(self.zoom);
+        let hint = if finest > MIN_LEVEL {
+            Some(self.level_range(finest - 1)?)
+        } else {
+            None
+        };
         let mut tiles = ViewTiles {
             live: Vec::new(),
             snapshot: Vec::new(),
+            hint,
         };
-        for level in (MIN_LEVEL.max(finest_level(self.zoom))..=MAX_LEVEL).rev() {
+        for level in (MIN_LEVEL.max(finest)..=MAX_LEVEL).rev() {
             let range = self.level_range(level)?;
             if level >= live_from {
                 tiles.live.push(range);
@@ -240,6 +249,7 @@ mod tests {
         assert_eq!(tiles.live.last().unwrap().level, -2);
         let levels: Vec<i32> = tiles.snapshot.iter().map(|r| r.level).collect();
         assert_eq!(levels, [-3, -4, -5, -6, -7, -8]);
+        assert_eq!(tiles.hint.unwrap().level, -9);
         assert_eq!(
             view.level_range(0).unwrap(),
             LevelRange {

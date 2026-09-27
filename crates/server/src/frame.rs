@@ -10,6 +10,7 @@ pub enum FrameKind {
     View,
     Snapshot,
     Move,
+    Hints,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

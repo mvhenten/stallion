@@ -4,6 +4,7 @@ import type {
   BoardOptions,
   BoardStatus,
   History,
+  LiveHints,
   LiveObjects,
   PinResult,
   PinState,
@@ -32,6 +33,7 @@ export type DrawingSource = {
   commit(stored: StoredObject): void;
   erase(objectId: string): void;
   readonly objects: LiveObjects;
+  readonly hints: LiveHints;
   readonly history: History;
   readonly awareness: Awareness | undefined;
   close(): Promise<void>;
@@ -86,6 +88,7 @@ export function openLocalSource(options: SourceOptions): BoardSource {
     commit: (stored) => board.put(stored),
     erase: (objectId) => board.remove(objectId),
     objects: board.objects,
+    hints: board.hints,
     history: board.history,
     awareness: undefined,
     get lock() {
@@ -115,6 +118,7 @@ export function openSyncSource(url: string, options: SourceOptions): BoardSource
     commit: (stored) => board.put(stored),
     erase: (objectId) => board.remove(objectId),
     objects: board.objects,
+    hints: board.hints,
     history: board.history,
     awareness: board.awareness,
     get lock() {
