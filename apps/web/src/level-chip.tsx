@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { levelOptions } from "./level";
+import { placementStyle, usePlacement } from "./popover";
 
 type LevelChipProps = {
   level: number;
@@ -7,13 +8,16 @@ type LevelChipProps = {
   onPick: (level: number) => void;
 };
 
+const LIST_MAX_PX = 440;
+
 export function LevelChip({ level, contentLevels, onPick }: LevelChipProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLButtonElement>(null);
+  const placement = usePlacement(open, rootRef, LIST_MAX_PX);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !placement) return;
     currentRef.current?.scrollIntoView({ block: "nearest" });
     const close = (event: PointerEvent) => {
       if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
@@ -21,7 +25,7 @@ export function LevelChip({ level, contentLevels, onPick }: LevelChipProps) {
     };
     window.addEventListener("pointerdown", close);
     return () => window.removeEventListener("pointerdown", close);
-  }, [open]);
+  }, [open, placement]);
 
   return (
     <div class="level" ref={rootRef}>
@@ -37,7 +41,13 @@ export function LevelChip({ level, contentLevels, onPick }: LevelChipProps) {
         {level}
       </button>
       {open && (
-        <div class="level-list" role="listbox" aria-label="Zoom levels">
+        <div
+          class="level-list"
+          data-side={placement?.side}
+          style={placementStyle(placement)}
+          role="listbox"
+          aria-label="Zoom levels"
+        >
           {levelOptions(level, contentLevels).map((option) => (
             <button
               key={option.level}

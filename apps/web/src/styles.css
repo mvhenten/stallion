@@ -52,21 +52,35 @@ body,
 
 .toolbar {
   position: fixed;
-  top: 12px;
-  left: 16px;
-  right: 16px;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: calc(16px + env(safe-area-inset-left, 0px));
+  right: calc(16px + env(safe-area-inset-right, 0px));
   width: fit-content;
+  max-width: calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+  box-sizing: border-box;
   margin: 0 auto;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 6px 10px;
+  gap: 4px;
+  padding: 4px 6px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
   box-shadow: 0 2px 8px #0000001a;
+}
+
+.toolbar-row {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar[data-layout="Expanded"] .toolbar-row + .toolbar-row {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 
 .group {
@@ -75,14 +89,16 @@ body,
   border: 0;
   min-width: 0;
   display: flex;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 2px;
 }
 
 .tool {
   display: grid;
+  flex: none;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 2px solid transparent;
   border-radius: 8px;
@@ -116,6 +132,10 @@ body,
 
 .swatch {
   position: relative;
+}
+
+.swatch-fill {
+  display: block;
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -124,17 +144,21 @@ body,
 
 .swatch[aria-pressed="true"] {
   border-color: transparent;
+}
+
+.swatch[aria-pressed="true"] .swatch-fill,
+.swatch.current .swatch-fill {
   box-shadow:
     inset 0 0 0 2px var(--panel),
     0 0 0 2px var(--panel),
-    0 0 0 5px var(--ink);
+    0 0 0 4px var(--ink);
 }
 
 .swatch.secondary::after {
   content: "";
   position: absolute;
-  right: -5px;
-  bottom: -5px;
+  right: 3px;
+  bottom: 3px;
   width: 10px;
   height: 10px;
   border: 2px solid var(--panel);
@@ -203,9 +227,10 @@ body,
 }
 
 .status {
+  flex: none;
   width: 10px;
   height: 10px;
-  margin: 0 4px;
+  margin: 0 6px;
   border-radius: 50%;
   background: #8b8d98;
 }
@@ -249,6 +274,7 @@ body,
   position: absolute;
   top: calc(100% + 10px);
   right: 0;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   width: 72px;
@@ -352,6 +378,12 @@ body,
   font-size: 12px;
 }
 
+.level-list[data-side="Above"],
+.peer-list[data-side="Above"] {
+  top: auto;
+  bottom: calc(100% + 10px);
+}
+
 .peer-list {
   position: absolute;
   top: calc(100% + 10px);
@@ -392,12 +424,35 @@ body,
   border-color: var(--accent);
 }
 
-.follow-pill {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+.presence-floater {
+  position: fixed;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+}
+
+.presence-floater:empty {
+  display: none;
+}
+
+.presence-floater .presence {
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--panel);
+  box-shadow: 0 2px 8px #0000001a;
+}
+
+.follow-pill {
+  display: flex;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   align-items: center;
   gap: 8px;
   height: 36px;
@@ -413,18 +468,6 @@ body,
   white-space: nowrap;
   cursor: pointer;
   touch-action: manipulation;
-}
-
-@media (max-width: 720px) {
-  .toolbar {
-    gap: 4px;
-    padding: 6px;
-  }
-
-  .presence {
-    flex-basis: 100%;
-    justify-content: center;
-  }
 }
 
 .field {

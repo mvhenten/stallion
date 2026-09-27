@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import { placementStyle, usePlacement } from "./popover";
 import type { Peer, Presence } from "./presence";
 
 export const MAX_CHIPS = 5;
+
+const LIST_MAX_PX = 440;
 
 type PresenceStripProps = {
   presence: Presence;
@@ -44,6 +47,7 @@ function PeerChip({
 export function PresenceStrip({ presence, onFollow }: PresenceStripProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLFieldSetElement>(null);
+  const placement = usePlacement(open, rootRef, LIST_MAX_PX);
   const { peers, following } = presence;
   const shown = peers.length > MAX_CHIPS ? peers.slice(0, MAX_CHIPS - 1) : peers;
   const hidden = peers.slice(shown.length);
@@ -84,7 +88,13 @@ export function PresenceStrip({ presence, onFollow }: PresenceStripProps) {
         </button>
       )}
       {open && (
-        <div class="peer-list" role="listbox" aria-label="More people">
+        <div
+          class="peer-list"
+          data-side={placement?.side}
+          style={placementStyle(placement)}
+          role="listbox"
+          aria-label="More people"
+        >
           {hidden.map((peer) => (
             <button
               key={peer.clientId}
