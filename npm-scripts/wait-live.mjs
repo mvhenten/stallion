@@ -1,6 +1,6 @@
 import { accessHeaders } from "./env.mjs";
 
-const [commit, origin = "https://stallion.matthijs-f49.workers.dev"] = process.argv.slice(2);
+const [commit, origin = "https://stallion.kattebak.fyi"] = process.argv.slice(2);
 if (!commit) {
   console.error("usage: node npm-scripts/wait-live.mjs <commit sha> [origin]");
   process.exit(2);

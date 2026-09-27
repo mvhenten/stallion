@@ -2,7 +2,7 @@
 
 Stallion is an infinite-zoom drawing board built for tablets. Two or more people can draw on one board at the same time. A Rust Cloudflare Worker syncs each board live.
 
-The live app runs at https://stallion.matthijs-f49.workers.dev. Sign-in is a one-time code sent by email. A board is open to anyone with its link until someone sets a PIN.
+The live app runs at https://stallion.kattebak.fyi; the old https://stallion.matthijs-f49.workers.dev link still works. Sign-in is a one-time code sent by email. A board is open to anyone with its link until someone sets a PIN.
 
 ## Run it locally
 
