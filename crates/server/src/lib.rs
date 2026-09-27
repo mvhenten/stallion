@@ -15,7 +15,7 @@ use std::time::Duration;
 use worker::*;
 
 use auth::{Access, AccessApp, Keys};
-use board::{BoardSync, Session};
+use board::{BoardSync, Route, Session};
 use frame::{Frame, FrameKind};
 use lock::{Lock, SqlLockStore};
 use me::{BoardPatch, Listener, SqlBoardIndex, UserBoards};
@@ -394,9 +394,20 @@ impl Board {
         for out in outgoing {
             let bytes = out.frame.encode();
             for ws in &sockets {
-                if out.route.reaches(ws == sender, &Self::session(ws)?) {
-                    ws.send_with_bytes(&bytes)?;
+                let session = Self::session(ws)?;
+                if !out.route.reaches(ws == sender, &session) {
+                    continue;
                 }
+                if matches!(out.route, Route::Snapshot(_) | Route::Hints(_)) {
+                    let frame = self
+                        .board
+                        .borrow_mut()
+                        .frame_for(&out, &session)
+                        .map_err(Error::RustError)?;
+                    ws.send_with_bytes(frame.encode())?;
+                    continue;
+                }
+                ws.send_with_bytes(&bytes)?;
             }
         }
         Ok(())

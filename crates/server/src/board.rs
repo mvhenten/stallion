@@ -9,7 +9,7 @@ use yrs::{Any, ClientID, Doc, Map, Out, ReadTxn, StateVector, Transact, Update};
 
 use crate::frame::{BOARD_KEY, Frame, FrameKind, Move, parse_tile_key};
 use crate::store::{TileCoord, TileHint, TileRecord, TileStore};
-use crate::view::{HINT_CAP, OBJECT_BUDGET, Viewport};
+use crate::view::{HINT_CAP, OBJECT_BUDGET, ViewTiles, Viewport};
 
 pub const OBJECTS: &str = "objects";
 
@@ -24,6 +24,13 @@ pub struct Session {
 }
 
 impl Session {
+    fn watches(&self, key: &str, band: fn(&ViewTiles, TileCoord) -> bool) -> bool {
+        let (Some(view), Ok(coord)) = (self.view.as_ref(), parse_tile_key(key)) else {
+            return false;
+        };
+        !self.subscribed(key) && view.tiles().is_ok_and(|tiles| band(&tiles, coord))
+    }
+
     pub fn subscribed(&self, key: &str) -> bool {
         self.tiles.contains(key)
             || self
@@ -38,6 +45,9 @@ pub enum Route {
     Sender,
     Tile(String),
     Board,
+    /// Sockets that see the tile read-only; the frame is built per socket by `BoardSync::frame_for`.
+    Snapshot(String),
+    Hints(String),
 }
 
 impl Route {
@@ -46,6 +56,15 @@ impl Route {
             Route::Sender => is_sender,
             Route::Tile(key) => !is_sender && session.subscribed(key),
             Route::Board => !is_sender,
+            Route::Snapshot(key) => session.watches(key, |tiles, coord| {
+                tiles.snapshot.iter().any(|range| range.contains(coord))
+            }),
+            Route::Hints(key) => session.watches(key, |tiles, coord| {
+                tiles
+                    .hint
+                    .as_ref()
+                    .is_some_and(|range| range.contains(coord))
+            }),
         }
     }
 }
@@ -225,6 +244,40 @@ impl<S: TileStore> BoardSync<S> {
         }
     }
 
+    /// The frame `out` carries to one socket it reaches: a changed tile's current state for a
+    /// snapshot viewer, that viewer's hint list for a hint viewer, else the frame as built.
+    pub fn frame_for(&mut self, out: &Outgoing, session: &Session) -> Result<Frame, String> {
+        match &out.route {
+            Route::Snapshot(key) => {
+                let doc = self.tile(key)?;
+                let state = doc
+                    .transact()
+                    .encode_state_as_update_v1(&StateVector::default());
+                Ok(Frame::new(key.clone(), FrameKind::Snapshot, state))
+            }
+            Route::Hints(_) => {
+                let Some(viewport) = session.view else {
+                    return Ok(out.frame.clone());
+                };
+                self.flush()?;
+                self.hints_frame(&viewport.tiles()?)
+            }
+            _ => Ok(out.frame.clone()),
+        }
+    }
+
+    fn hints_frame(&self, tiles: &ViewTiles) -> Result<Frame, String> {
+        let hints = match &tiles.hint {
+            Some(range) => self.store.hints(range, range.center(), HINT_CAP)?,
+            None => Vec::new(),
+        };
+        Ok(Frame::new(
+            BOARD_KEY,
+            FrameKind::Hints,
+            encode_hints(&hints),
+        ))
+    }
+
     fn view(&mut self, session: &mut Session, viewport: Viewport) -> Result<Vec<Outgoing>, String> {
         let tiles = viewport.tiles()?;
         self.flush()?;
@@ -263,15 +316,7 @@ impl<S: TileStore> BoardSync<S> {
                 outgoing.push(reply(Frame::new(key, FrameKind::Sync, step2)));
             }
         }
-        let hints = match &tiles.hint {
-            Some(range) => self.store.hints(range, range.center(), HINT_CAP)?,
-            None => Vec::new(),
-        };
-        outgoing.push(reply(Frame::new(
-            BOARD_KEY,
-            FrameKind::Hints,
-            encode_hints(&hints),
-        )));
+        outgoing.push(reply(self.hints_frame(&tiles)?));
         Ok(outgoing)
     }
 
@@ -301,6 +346,7 @@ impl<S: TileStore> BoardSync<S> {
                         outgoing.extend(self.evict(&key, &doc, &object_id));
                     }
                 }
+                outgoing.extend(refresh(&key));
                 Ok(outgoing)
             }
         }
@@ -337,14 +383,15 @@ impl<S: TileStore> BoardSync<S> {
             relay(&moved.from_tile, moved.from_update),
             relay(&moved.to_tile, moved.to_update),
         ];
-        if !holds(&to, &moved.object_id) {
-            return Ok(outgoing);
+        if holds(&to, &moved.object_id) {
+            outgoing.extend(self.evict(&moved.from_tile, &from, &moved.object_id));
+            let elsewhere = self.holder(&moved.object_id, &[&moved.from_tile, &moved.to_tile])?;
+            if !was_in_source && elsewhere.is_some() {
+                outgoing.extend(self.evict(&moved.to_tile, &to, &moved.object_id));
+            }
         }
-        outgoing.extend(self.evict(&moved.from_tile, &from, &moved.object_id));
-        let elsewhere = self.holder(&moved.object_id, &[&moved.from_tile, &moved.to_tile])?;
-        if !was_in_source && elsewhere.is_some() {
-            outgoing.extend(self.evict(&moved.to_tile, &to, &moved.object_id));
-        }
+        outgoing.extend(refresh(&moved.from_tile));
+        outgoing.extend(refresh(&moved.to_tile));
         Ok(outgoing)
     }
 
@@ -468,6 +515,19 @@ fn stamp_user(update: &mut AwarenessUpdate, user: &str) -> Result<(), String> {
 
 fn tile_key((level, tx, ty): TileCoord) -> String {
     format!("{level}:{tx}:{ty}")
+}
+
+fn refresh(key: &str) -> [Outgoing; 2] {
+    [
+        Outgoing {
+            route: Route::Snapshot(key.to_owned()),
+            frame: Frame::new(key, FrameKind::Snapshot, Vec::new()),
+        },
+        Outgoing {
+            route: Route::Hints(key.to_owned()),
+            frame: Frame::new(BOARD_KEY, FrameKind::Hints, Vec::new()),
+        },
+    ]
 }
 
 fn reply(frame: Frame) -> Outgoing {
@@ -844,6 +904,13 @@ mod tests {
         fn handle(&mut self) -> Vec<Frame> {
             let mut replies = Vec::new();
             for frame in std::mem::take(&mut self.inbox) {
+                if frame.kind == FrameKind::Snapshot {
+                    self.doc
+                        .transact_mut()
+                        .apply_update(Update::decode_v1(&frame.payload).unwrap())
+                        .unwrap();
+                    continue;
+                }
                 if frame.kind != FrameKind::Sync {
                     continue;
                 }
@@ -879,7 +946,7 @@ mod tests {
         for out in outgoing {
             for (i, client) in clients.iter_mut().enumerate() {
                 if out.route.reaches(i == from, &client.session) {
-                    client.inbox.push(out.frame.clone());
+                    client.inbox.push(board.frame_for(&out, &client.session)?);
                 }
             }
         }
@@ -970,6 +1037,61 @@ mod tests {
         let closed = board.close(&clients[0].session).unwrap();
         let gone = AwarenessUpdate::decode_v1(&closed[0].frame.payload).unwrap();
         assert_eq!(&*gone.clients[&ClientID::new(7)].json, "null");
+    }
+
+    fn remove(client: &Client, object_id: &str) -> Frame {
+        let objects = client.doc.get_or_insert_map(OBJECTS);
+        let mut txn = client.doc.transact_mut();
+        let before = txn.state_vector();
+        objects.remove(&mut txn, object_id);
+        sync(SyncMessage::Update(txn.encode_state_as_update_v1(&before)))
+    }
+
+    fn hinted(frames: &[Frame]) -> Option<usize> {
+        let hints = frames.iter().rfind(|f| f.kind == FrameKind::Hints)?;
+        let decoded: Vec<ciborium::Value> = ciborium::from_reader(&hints.payload[..]).unwrap();
+        Some(decoded.len())
+    }
+
+    #[test]
+    fn an_erase_reaches_viewers_that_see_the_tile_as_a_snapshot_or_a_hint() {
+        let mut board = board();
+        let mut clients = [Client::new(), Client::new(), Client::new()];
+        connect(&mut board, &mut clients, 0);
+        let update = put(&clients[0], "stroke-0001", fixture());
+        send(&mut board, &mut clients, 0, update).unwrap();
+        send(
+            &mut board,
+            &mut clients,
+            1,
+            view_frame(0.0, 0.0, 1.0 / 16.0),
+        )
+        .unwrap();
+        send(
+            &mut board,
+            &mut clients,
+            2,
+            view_frame(0.0, 0.0, 1.0 / 300.0),
+        )
+        .unwrap();
+        clients[1].handle();
+        assert!(stored(&clients[1].doc, "stroke-0001").is_some());
+        assert_eq!(hinted(&clients[2].inbox), Some(1));
+        clients[2].inbox.clear();
+
+        let erase = remove(&clients[0], "stroke-0001");
+        send(&mut board, &mut clients, 0, erase).unwrap();
+
+        clients[1].handle();
+        assert!(
+            stored(&clients[1].doc, "stroke-0001").is_none(),
+            "the snapshot viewer still holds the erased stroke"
+        );
+        assert_eq!(
+            hinted(&clients[2].inbox),
+            Some(0),
+            "the hint viewer still sees a hint for the emptied tile"
+        );
     }
 
     #[test]

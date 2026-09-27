@@ -250,8 +250,14 @@ export class TestServer {
   }
 
   private update(session: Session, key: string, body: Uint8Array): void {
-    Y.applyUpdate(this.doc(key), body, session);
+    const doc = this.doc(key);
+    Y.applyUpdate(doc, body, session);
     for (const other of this.sessions) {
+      const snapshot = other.view?.snapshot.some((range) => covers(range, key)) ?? false;
+      if (snapshot && !this.subscribed(other, key)) {
+        this.sendTo(other, key, "Snapshot", Y.encodeStateAsUpdate(doc));
+        continue;
+      }
       if (other !== session && this.subscribed(other, key)) {
         this.sendTo(
           other,

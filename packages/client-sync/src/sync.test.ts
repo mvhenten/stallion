@@ -343,3 +343,17 @@ test("a stroke erased while another client was disconnected is gone after it rec
 
   expect(bob.objects.has("erased")).toBe(false);
 });
+
+test("a stroke erased under a zoomed-out client's snapshot band disappears without it moving", async () => {
+  const server = new TestServer();
+  const alice = open(server);
+  alice.put(stroke("erased"));
+  await until(() => server.objectIds(TILE).length === 1, "the server holds the stroke");
+  const bob = open(server);
+  bob.setView({ minX: 0, minY: 0, maxX: 1024 * 16, maxY: 768 * 16 }, 1 / 16);
+  await until(() => bob.objects.has("erased"), "bob sees the stroke as a snapshot");
+
+  alice.remove("erased");
+
+  await until(() => !bob.objects.has("erased"), "bob drops the erased stroke");
+});
