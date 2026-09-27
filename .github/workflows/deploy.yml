@@ -30,4 +30,4 @@ jobs:
       - name: Wait for Workers Builds to serve this commit
         run: npm run wait:live -- "$GITHUB_SHA"
       - name: Smoke through Access
-        run: npm run smoke -- "https://stallion.matthijs-f49.workers.dev/b/ci-${{ github.run_id }}"
+        run: npm run smoke -- "https://stallion.kattebak.fyi/b/ci-${{ github.run_id }}"
