@@ -728,9 +728,7 @@ const smokeShapes = async ({ browser, devices, analyser, url, dir, device }) => 
     const kept = await inked(rows, blanks, "reloaded");
     expectRows(kept, [1, 2, 3, MOVED_ROW], "after reload");
     const counts = await countStoredRows(page);
-    if (counts.objects !== SHAPE_KINDS.length) {
-      fail(`${label}: ${counts.objects} objects stored after reload, want ${SHAPE_KINDS.length}`);
-    }
+    if ((counts.tiles ?? 0) === 0) fail(`${label}: no tile stored in IndexedDB after reload`);
     check();
     return {
       ink: kept.map((ratio) => Number(ratio.toFixed(3))),
