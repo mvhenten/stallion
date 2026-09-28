@@ -167,10 +167,9 @@ export const continueDraft = (draft: Draft): Draft => {
   return { ...draft, objectId: newObjectId(), points: last ? [last] : [] };
 };
 
-const draftBounds = (draft: Draft): BBox => {
-  const margin = strokeWorldWidth(draft.width, draft.nativeZoom);
-  const xs = draft.points.map((p) => p[0]);
-  const ys = draft.points.map((p) => p[1]);
+const pointsBounds = (points: readonly StrokePoint[], margin: number): BBox => {
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
   return {
     minX: Math.min(...xs) - margin,
     minY: Math.min(...ys) - margin,
@@ -181,7 +180,7 @@ const draftBounds = (draft: Draft): BBox => {
 
 export const finishDraft = (draft: Draft): StoredObject | undefined => {
   if (draft.points.length === 0) return undefined;
-  const bbox = draftBounds(draft);
+  const bbox = pointsBounds(draft.points, strokeWorldWidth(draft.width, draft.nativeZoom));
   const placed = place(bbox);
   if (!placed.ok) return undefined;
   const { tile } = placed;
@@ -262,6 +261,37 @@ export const translateStroke = (
   const points = stroke.points.map(([x, y, pressure]): StrokePoint => {
     const world = fromTileLocal(tile, { x, y });
     const local = toTileLocal(placed.tile, { x: world.x + dx, y: world.y + dy });
+    return [local.x, local.y, pressure];
+  });
+  return { tile: placed.tile, object: { ...stroke, bbox, points } };
+};
+
+export type Scale = { anchor: Point; sx: number; sy: number };
+
+export const scaleAbout = ({ anchor, sx, sy }: Scale, point: Point): Point => ({
+  x: anchor.x + (point.x - anchor.x) * sx,
+  y: anchor.y + (point.y - anchor.y) * sy,
+});
+
+const worldPoints = (tile: Tile, stroke: Stroke): StrokePoint[] =>
+  stroke.points.map(([x, y, pressure]): StrokePoint => {
+    const world = fromTileLocal(tile, { x, y });
+    return [world.x, world.y, pressure];
+  });
+
+export const strokeExtent = (tile: Tile, stroke: Stroke): BBox =>
+  pointsBounds(worldPoints(tile, stroke), 0);
+
+export const scaleStroke = (tile: Tile, stroke: Stroke, scale: Scale): StoredObject | undefined => {
+  const scaled = worldPoints(tile, stroke).map(([x, y, pressure]): StrokePoint => {
+    const world = scaleAbout(scale, { x, y });
+    return [world.x, world.y, pressure];
+  });
+  const bbox = pointsBounds(scaled, strokeWorldWidth(widthOf(stroke), stroke.nativeZoom));
+  const placed = place(bbox);
+  if (!placed.ok) return undefined;
+  const points = scaled.map(([x, y, pressure]): StrokePoint => {
+    const local = toTileLocal(placed.tile, { x, y });
     return [local.x, local.y, pressure];
   });
   return { tile: placed.tile, object: { ...stroke, bbox, points } };

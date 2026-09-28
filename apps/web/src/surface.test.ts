@@ -2,7 +2,7 @@ import type { StoredObject } from "@stallion/client-store";
 import type { LiveObjects } from "@stallion/client-sync";
 import type { Shape } from "@stallion/schema";
 import { afterEach, expect, test, vi } from "vitest";
-import { shapeWorldPoints } from "./shape";
+import { shapeBounds, shapeLook, shapeWorldPoints } from "./shape";
 import { createSurface, INK_ALPHA, PAPER, type Tool } from "./surface";
 import type { Awareness, DrawingSource } from "./sync";
 
@@ -83,6 +83,7 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     lineTo: () => undefined,
     closePath: () => undefined,
     setLineDash: () => undefined,
+    strokeRect: () => undefined,
     stroke: function (this: { strokeStyle: string }) {
       calls.push(`stroke ${this.strokeStyle}`);
     },
@@ -246,4 +247,30 @@ test("draws a rectangle, moves it by its edge and erases it where it landed", ()
   surface.dispose();
 
   expect(erased).toContain(drawn.object.objectId);
+});
+
+test("drags the bottom-right handle of a selected rectangle to double its size", () => {
+  const { surface, arrive, use, commits } = harness([]);
+  use({ mode: "Shape", shape: "Rectangle" });
+  dragAlong({ x: 100, y: 100 }, { x: 200, y: 150 });
+  const [drawn] = commits;
+  if (drawn?.object.type !== "Shape") throw new Error("no shape committed");
+  arrive(drawn);
+
+  use({ mode: "Select" });
+  dragAlong({ x: 150, y: 100 }, { x: 150, y: 100 });
+  const { maxX, maxY } = drawn.object.bbox;
+  dragAlong({ x: maxX + 4, y: maxY + 4 }, { x: maxX + 104, y: maxY + 54 });
+  surface.dispose();
+
+  const resized = commits[1];
+  if (resized?.object.type !== "Shape") throw new Error("no resize committed");
+  expect(resized.object.objectId).toBe(drawn.object.objectId);
+  expect(resized.object.width).toBe(drawn.object.width);
+  const { start, end } = shapeWorldPoints(resized.tile, resized.object);
+  expect(start.x).toBeCloseTo(100, 9);
+  expect(start.y).toBeCloseTo(100, 9);
+  expect(end.x).toBeCloseTo(300, 9);
+  expect(end.y).toBeCloseTo(200, 9);
+  expect(resized.object.bbox).toEqual(shapeBounds(shapeLook(resized.object), start, end));
 });

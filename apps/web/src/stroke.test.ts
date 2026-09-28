@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   finishDraft,
   PENCIL_SIZES,
+  scaleStroke,
   sliderToWidth,
   startDraft,
   strokeFrame,
@@ -97,5 +98,37 @@ describe("translateStroke", () => {
     const world = first && moved && fromTileLocal(moved.tile, { x: first[0], y: first[1] });
     expect(world?.x).toBeCloseTo(310);
     expect(world?.y).toBeCloseTo(10);
+  });
+});
+
+describe("scaleStroke", () => {
+  test("scales the points about the anchor and keeps the line width as the bbox margin", () => {
+    const draft = startDraft(0, 3, "Pen", 1);
+    draft.points.push([10, 10, 0.4], [40, 20, 0.6]);
+    const stored = finishDraft(draft);
+    if (stored?.object.type !== "Stroke") throw new Error("no stroke");
+    const margin = strokeWorldWidth(3, stored.object.nativeZoom);
+    const scaled = scaleStroke(stored.tile, stored.object, {
+      anchor: { x: 10, y: 10 },
+      sx: 2,
+      sy: 3,
+    });
+    if (scaled?.object.type !== "Stroke") throw new Error("no scaled stroke");
+    expect(scaled.object.width).toBe(3);
+    expect(scaled.object.bbox).toEqual({
+      minX: 10 - margin,
+      minY: 10 - margin,
+      maxX: 70 + margin,
+      maxY: 40 + margin,
+    });
+    const points = scaled.object.points.map(([x, y, pressure]) => {
+      const world = fromTileLocal(scaled.tile, { x, y });
+      return [world.x, world.y, pressure];
+    });
+    expect(points[0]?.[0]).toBeCloseTo(10);
+    expect(points[0]?.[1]).toBeCloseTo(10);
+    expect(points[1]?.[0]).toBeCloseTo(70);
+    expect(points[1]?.[1]).toBeCloseTo(40);
+    expect(points.map((point) => point[2])).toEqual([0.4, 0.6]);
   });
 });

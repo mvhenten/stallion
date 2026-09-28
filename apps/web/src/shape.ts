@@ -19,7 +19,14 @@ import {
   styleOf,
   widthOf,
 } from "@stallion/schema";
-import { dashPattern, HIGHLIGHTER_ALPHA, newObjectId, strokeWorldWidth } from "./stroke";
+import {
+  dashPattern,
+  HIGHLIGHTER_ALPHA,
+  newObjectId,
+  type Scale,
+  scaleAbout,
+  strokeWorldWidth,
+} from "./stroke";
 
 export const TINT_ALPHA = 0.2;
 
@@ -155,6 +162,12 @@ export const translateShape = (
     { x: start.x + dx, y: start.y + dy },
     { x: end.x + dx, y: end.y + dy },
   );
+};
+
+export const scaleShape = (tile: Tile, shape: Shape, scale: Scale): StoredObject | undefined => {
+  const { start, end } = shapeWorldPoints(tile, shape);
+  const { bbox: _bbox, start: _start, end: _end, ...base } = shape;
+  return placeShape(base, shapeLook(shape), scaleAbout(scale, start), scaleAbout(scale, end));
 };
 
 export const shapeScreenInk = (

@@ -2,7 +2,7 @@ import type { Point } from "@stallion/geometry";
 
 export type PointerKind = "mouse" | "pen" | "touch";
 
-export type Modifiers = { panTool: boolean; spaceDown: boolean };
+export type Modifiers = { panTool: boolean; spaceDown: boolean; onHandle: boolean };
 
 export type DragInput = {
   first: boolean;
@@ -19,6 +19,7 @@ export type PinchInput = { first: boolean; last: boolean; origin: Point; distanc
 
 export type Effect =
   | { type: "StartStroke"; secondary: boolean; point: Point }
+  | { type: "StartResize"; point: Point }
   | { type: "ExtendStroke" }
   | { type: "CommitStroke" }
   | { type: "DiscardStroke" }
@@ -30,6 +31,7 @@ type DragMode =
   | { mode: "Ignore" }
   | { mode: "Pending"; point: Point; time: number }
   | { mode: "Draw"; kind: PointerKind }
+  | { mode: "Resize" }
   | { mode: "Pan"; point: Point };
 
 type PinchMode =
@@ -76,6 +78,10 @@ export function createInput(): Input {
       drag = { mode: "Ignore" };
       return [];
     }
+    if (modifiers.onHandle && input.button === PRIMARY) {
+      drag = { mode: "Resize" };
+      return [{ type: "StartResize", point: input.point }];
+    }
     if (wantsPan(input, modifiers)) {
       drag = { mode: "Pan", point: input.point };
       return [];
@@ -98,7 +104,7 @@ export function createInput(): Input {
       if (!input.intentional && input.time - drag.time < PENDING_MS) return [];
       effects.push(...promote());
     }
-    if (drag.mode === "Draw") effects.push({ type: "ExtendStroke" });
+    if (drag.mode === "Draw" || drag.mode === "Resize") effects.push({ type: "ExtendStroke" });
     if (drag.mode === "Pan") {
       effects.push({
         type: "Pan",
@@ -113,13 +119,18 @@ export function createInput(): Input {
   const end = (input: DragInput): Effect[] => {
     const effects: Effect[] = [];
     if (drag.mode === "Pending" && !input.cancelled) effects.push(...promote());
-    if (drag.mode === "Draw")
+    if (drag.mode === "Draw" || drag.mode === "Resize")
       effects.push({ type: input.cancelled ? "DiscardStroke" : "CommitStroke" });
     drag = { mode: "Idle" };
     return effects;
   };
 
   const startPinch = (input: PinchInput): Effect[] => {
+    if (drag.mode === "Resize") {
+      drag = { mode: "Ignore" };
+      pinch = { mode: "Ignore" };
+      return [{ type: "DiscardStroke" }];
+    }
     if (drag.mode === "Draw" && drag.kind !== "touch") {
       pinch = { mode: "Ignore" };
       return [];

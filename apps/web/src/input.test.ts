@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createInput, type DragInput, type Effect } from "./input";
 
-const idle = { panTool: false, spaceDown: false };
+const idle = { panTool: false, spaceDown: false, onHandle: false };
 
 const touch = (x: number, y: number, time: number, phase: Partial<DragInput> = {}): DragInput => ({
   first: false,
@@ -79,4 +79,22 @@ test("a touch waits for intent while mouse and pen start on pointerdown", () => 
 
   const pen = input.drag({ ...touch(5, 5, 100, { first: true }), kind: "pen" }, idle);
   expect(pen).toEqual([{ type: "StartStroke", secondary: false, point: { x: 5, y: 5 } }]);
+});
+
+test("a touch on a handle resizes at once, even after a pen, and a second finger cancels it", () => {
+  const input = createInput();
+  input.drag({ ...touch(0, 0, 0, { first: true, last: true }), kind: "pen" }, idle);
+  const handle = { ...idle, onHandle: true };
+  const effects: Effect[] = [
+    ...input.drag(touch(100, 100, 10, { first: true, intentional: false }), handle),
+    ...input.drag(touch(120, 110, 20), handle),
+    ...input.pinch(pinch(150, 100, 100, true)),
+    ...input.pinch(pinch(190, 100, 140)),
+    ...input.drag(touch(130, 120, 40, { last: true }), handle),
+  ];
+  expect(effects.map((effect) => effect.type)).toEqual([
+    "StartResize",
+    "ExtendStroke",
+    "DiscardStroke",
+  ]);
 });

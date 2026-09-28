@@ -1,6 +1,7 @@
 import type { StoredObject } from "@stallion/client-store";
 import { createInkPublisher, createInkReader, type LiveInk } from "@stallion/client-sync";
 import {
+  type BBox,
   bboxCentre,
   cull,
   dedupeMarkers,
@@ -52,6 +53,7 @@ import {
   finishShape,
   paintShape,
   type ShapeDraft,
+  scaleShape,
   shapeLook,
   shapeScreenInk,
   shapeWorldPoints,
@@ -65,9 +67,12 @@ import {
   finishDraft,
   MAX_POINTS,
   paintInk,
+  type Scale,
   type StrokeFrame,
   type StrokeInk,
+  scaleStroke,
   startDraft,
+  strokeExtent,
   strokeFrame,
   strokeFrameInk,
   translateStroke,
@@ -101,6 +106,51 @@ const translate = (entry: Entry, dx: number, dy: number): StoredObject | undefin
     : translateShape(entry.tile, entry.object, dx, dy);
 
 type Drag = { objectId: string; from: Point; dx: number; dy: number };
+
+const extent = (entry: Entry): BBox => {
+  if (entry.type === "Stroke") return strokeExtent(entry.tile, entry.object);
+  const { start, end } = entry;
+  return {
+    minX: Math.min(start.x, end.x),
+    minY: Math.min(start.y, end.y),
+    maxX: Math.max(start.x, end.x),
+    maxY: Math.max(start.y, end.y),
+  };
+};
+
+const scale = (entry: Entry, by: Scale): StoredObject | undefined =>
+  entry.type === "Stroke"
+    ? scaleStroke(entry.tile, entry.object, by)
+    : scaleShape(entry.tile, entry.object, by);
+
+type Corner = { right: boolean; bottom: boolean };
+
+const CORNERS: readonly Corner[] = [
+  { right: false, bottom: false },
+  { right: true, bottom: false },
+  { right: true, bottom: true },
+  { right: false, bottom: true },
+];
+
+const cornerOf = (box: BBox, { right, bottom }: Corner): Point => ({
+  x: right ? box.maxX : box.minX,
+  y: bottom ? box.maxY : box.minY,
+});
+
+type Resize = {
+  objectId: string;
+  anchor: Point;
+  corner: Point;
+  from: Point;
+  result: StoredObject | undefined;
+  preview: Entry | undefined;
+};
+
+const SELECTION_PAD_PX = 4;
+
+export const HANDLE_HIT_PX = 44;
+
+const HANDLE_PX = 12;
 
 const SELECTION = "#0090ff";
 
@@ -202,6 +252,7 @@ export function createSurface(
   let eraser: Point | undefined;
   let selected: string | undefined;
   let drag: Drag | undefined;
+  let resizing: Resize | undefined;
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -237,9 +288,12 @@ export function createSurface(
       y: (world.y - camera.y) * camera.zoom * dpr,
     });
     const markers: Marker[] = [];
-    for (const entry of ordered) {
+    for (const original of ordered) {
+      const resized =
+        resizing?.objectId === original.object.objectId ? resizing.preview : undefined;
+      const entry = resized ?? original;
       const dragged = drag?.objectId === entry.object.objectId ? drag : undefined;
-      const culled = dragged ? "Draw" : cull(entry.object.bbox, view, camera.zoom);
+      const culled = dragged || resized ? "Draw" : cull(entry.object.bbox, view, camera.zoom);
       if (culled === "Skip") continue;
       const colour = rgbHex(rgbOf(entry.object));
       if (culled === "Marker") {
@@ -327,24 +381,59 @@ export function createSurface(
     }
   };
 
-  const renderSelection = (dpr: number) => {
-    const entry = selected === undefined ? undefined : entries.get(selected);
-    if (!entry) return;
+  const selectedEntry = (): Entry | undefined => {
+    if (selected === undefined) return undefined;
+    if (resizing?.objectId === selected && resizing.preview) return resizing.preview;
+    return entries.get(selected);
+  };
+
+  const selectionCorners = (entry: Entry): Point[] => {
     const { dx, dy } = drag ?? { dx: 0, dy: 0 };
     const { bbox } = entry.object;
     const topLeft = worldToScreen(camera, { x: bbox.minX + dx, y: bbox.minY + dy });
     const bottomRight = worldToScreen(camera, { x: bbox.maxX + dx, y: bbox.maxY + dy });
+    const box = {
+      minX: topLeft.x - SELECTION_PAD_PX,
+      minY: topLeft.y - SELECTION_PAD_PX,
+      maxX: bottomRight.x + SELECTION_PAD_PX,
+      maxY: bottomRight.y + SELECTION_PAD_PX,
+    };
+    return CORNERS.map((corner) => cornerOf(box, corner));
+  };
+
+  const handleAt = (screen: Point): Corner | undefined => {
+    const entry = selectedEntry();
+    if (!entry) return undefined;
+    let best: { corner: Corner; distance: number } | undefined;
+    selectionCorners(entry).forEach((point, index) => {
+      const dx = Math.abs(screen.x - point.x);
+      const dy = Math.abs(screen.y - point.y);
+      const corner = CORNERS[index];
+      if (!corner || dx > HANDLE_HIT_PX / 2 || dy > HANDLE_HIT_PX / 2) return;
+      const distance = Math.hypot(dx, dy);
+      if (!best || distance < best.distance) best = { corner, distance };
+    });
+    return best?.corner;
+  };
+
+  const renderSelection = (dpr: number) => {
+    const entry = selectedEntry();
+    if (!entry) return;
+    const [topLeft, , bottomRight] = selectionCorners(entry);
+    if (!topLeft || !bottomRight) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.strokeStyle = SELECTION;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
-    ctx.strokeRect(
-      topLeft.x - 4,
-      topLeft.y - 4,
-      bottomRight.x - topLeft.x + 8,
-      bottomRight.y - topLeft.y + 8,
-    );
+    ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
     ctx.setLineDash([]);
+    if (drag) return;
+    ctx.fillStyle = PAPER;
+    ctx.lineWidth = 1.5;
+    for (const { x, y } of selectionCorners(entry)) {
+      ctx.fillRect(x - HANDLE_PX / 2, y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
+      ctx.strokeRect(x - HANDLE_PX / 2, y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
+    }
   };
 
   const renderCursors = (dpr: number) => {
@@ -452,6 +541,42 @@ export function createSurface(
     if (!moved || !entry || (moved.dx === 0 && moved.dy === 0)) return;
     const stored = translate(entry, moved.dx, moved.dy);
     if (stored) source.commit(stored);
+  };
+
+  const startResize = (screen: Point) => {
+    const entry = selected === undefined ? undefined : entries.get(selected);
+    const handle = handleAt(screen);
+    if (!entry || !handle) return;
+    const box = extent(entry);
+    resizing = {
+      objectId: entry.object.objectId,
+      anchor: cornerOf(box, { right: !handle.right, bottom: !handle.bottom }),
+      corner: cornerOf(box, handle),
+      from: screenToWorld(camera, screen),
+      result: undefined,
+      preview: undefined,
+    };
+  };
+
+  const resizeTo = (screen: Point) => {
+    const entry = resizing && entries.get(resizing.objectId);
+    if (!resizing || !entry) return;
+    const { anchor, corner, from } = resizing;
+    const world = screenToWorld(camera, screen);
+    const factor = (moved: number, span: number): number => (span === 0 ? 1 : moved / span);
+    const by: Scale = {
+      anchor,
+      sx: factor(corner.x + world.x - from.x - anchor.x, corner.x - anchor.x),
+      sy: factor(corner.y + world.y - from.y - anchor.y, corner.y - anchor.y),
+    };
+    const result = by.sx === 1 && by.sy === 1 ? undefined : scale(entry, by);
+    resizing = { ...resizing, result, preview: result && entryOf(result) };
+  };
+
+  const finishResize = () => {
+    const result = resizing?.result;
+    resizing = undefined;
+    if (result) source.commit(result);
   };
 
   const discard = (objectId: string) => {
@@ -692,8 +817,15 @@ export function createSurface(
           addPoint(effect.point, event ? pressureOf(event) : 0.5);
           break;
         }
+        case "StartResize":
+          startResize(effect.point);
+          break;
         case "ExtendStroke": {
           if (!event) break;
+          if (resizing) {
+            resizeTo(localPoint(event));
+            break;
+          }
           const samples = event.getCoalescedEvents?.() ?? [];
           for (const sample of samples.length > 0 ? samples : [event]) {
             if (drag) dragTo(localPoint(sample));
@@ -706,6 +838,7 @@ export function createSurface(
         case "CommitStroke":
           eraser = undefined;
           drop();
+          finishResize();
           commit();
           commitShape();
           source.history.checkpoint();
@@ -713,6 +846,7 @@ export function createSurface(
         case "DiscardStroke":
           eraser = undefined;
           drag = undefined;
+          resizing = undefined;
           draft = undefined;
           shapeDraft = undefined;
           publisher?.clear();
@@ -780,7 +914,12 @@ export function createSurface(
         point: localPoint(event),
         time: event.timeStamp,
       },
-      { panTool: currentTool().mode === "Pan", spaceDown },
+      {
+        panTool: currentTool().mode === "Pan",
+        spaceDown,
+        onHandle:
+          first && currentTool().mode === "Select" && handleAt(localPoint(event)) !== undefined,
+      },
     );
     apply(effects, event);
     if (!first || event.pointerType !== "touch") return;

@@ -739,6 +739,167 @@ const smokeShapes = async ({ browser, devices, analyser, url, dir, device }) => 
   }
 };
 
+const RESIZE_OBJECTS = ["Rectangle", "Stroke"];
+const HANDLE_REACH_PX = 6;
+const BBOX_TOLERANCE_PX = 3;
+const MIN_GROWTH = 1.8;
+
+const inkBox = (analyser, before, after) =>
+  analyser.evaluate(
+    async ([beforeB64, afterB64]) => {
+      const pixels = async (b64) => {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(bitmap, 0, 0);
+        return {
+          width: bitmap.width,
+          data: ctx.getImageData(0, 0, bitmap.width, bitmap.height).data,
+        };
+      };
+      const a = await pixels(beforeB64);
+      const b = await pixels(afterB64);
+      const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+      for (let i = 0; i < b.data.length; i += 4) {
+        const distance =
+          Math.abs(a.data[i] - b.data[i]) +
+          Math.abs(a.data[i + 1] - b.data[i + 1]) +
+          Math.abs(a.data[i + 2] - b.data[i + 2]);
+        if (distance <= 48) continue;
+        const x = (i / 4) % b.width;
+        const y = Math.floor(i / 4 / b.width);
+        box.minX = Math.min(box.minX, x);
+        box.minY = Math.min(box.minY, y);
+        box.maxX = Math.max(box.maxX, x);
+        box.maxY = Math.max(box.maxY, y);
+      }
+      return Number.isFinite(box.minX) ? box : undefined;
+    },
+    [before.toString("base64"), after.toString("base64")],
+  );
+
+const touchDrag = async (page, points, midway) => {
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type, point) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: point ? [{ x: point.x, y: point.y, id: 1, radiusX: 2, radiusY: 2 }] : [],
+    });
+  const [first, ...rest] = points;
+  await touch("touchStart", first);
+  for (const [index, point] of rest.entries()) {
+    await touch("touchMove", point);
+    if (index === Math.floor(rest.length / 2)) await midway();
+  }
+  await touch("touchEnd");
+  await cdp.detach();
+};
+
+const zigzag = (from, to) =>
+  Array.from({ length: 13 }, (_, i) => ({
+    x: from.x + ((to.x - from.x) * i) / 12,
+    y: i % 2 === 0 ? from.y : to.y,
+  }));
+
+const smokeResize = async ({ browser, devices, analyser, url, dir, device, object }) => {
+  const label = `resize ${object} ${device}`;
+  const context = await browser.newContext({ ...devices[device], colorScheme: "light" });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`${label}: ${problems[0]}`);
+  };
+  const prefix = `resize-${object.toLowerCase()}-${device.toLowerCase().replace(/\W+/g, "-")}`;
+  const shot = async (name, clip) => {
+    const path = join(dir, `${prefix}-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  const measure = async (blank, stage) => {
+    const after = await shot(`${stage}-area`, blank.clip);
+    return (
+      (await inkBox(analyser, blank.buffer, after.buffer)) ?? fail(`${label}: no ink ${stage}`)
+    );
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail(`${label}: no palette bounding box`);
+    const clip = {
+      x: box.x + box.width + CLIP_PAD,
+      y: 16,
+      width: viewport.width - 16 - (box.x + box.width + CLIP_PAD),
+      height: viewport.height - 90 - 16,
+    };
+    const blank = { ...(await shot("before", clip)), clip };
+    const from = { x: clip.x + 30, y: clip.y + 30 };
+    const size = { x: (clip.width - 80) / 2, y: Math.min(160, (clip.height - 80) / 2) };
+    const to = { x: from.x + size.x, y: from.y + size.y };
+    if (object === "Rectangle") {
+      await palette.getByRole("button", { name: "Rectangle", exact: true }).tap();
+      await drawWithTouch(page, linePath(from, to));
+    } else {
+      await drawWithTouch(page, zigzag(from, to));
+    }
+    await page.waitForTimeout(800);
+    const drawn = await measure(blank, "drawn");
+    check();
+    await palette.getByRole("button", { name: "Select tool" }).tap();
+    await drawWithTouch(page, [
+      object === "Rectangle" ? { x: (from.x + to.x) / 2, y: from.y } : from,
+    ]);
+    await page.waitForTimeout(400);
+    const selected = await shot("selected");
+    const grab = { x: to.x + HANDLE_REACH_PX, y: to.y + HANDLE_REACH_PX };
+    const target = { x: grab.x + size.x, y: grab.y + size.y };
+    let middle;
+    await touchDrag(page, linePath(grab, target), async () => {
+      await page.waitForTimeout(300);
+      middle = await shot("mid-drag");
+    });
+    await page.waitForTimeout(400);
+    const resizedSelected = await shot("resized");
+    await drawWithTouch(page, [{ x: clip.x + clip.width - 10, y: clip.y + clip.height - 10 }]);
+    await page.waitForTimeout(1300);
+    const resized = await measure(blank, "resized");
+    const growth = {
+      x: (resized.maxX - resized.minX) / (drawn.maxX - drawn.minX),
+      y: (resized.maxY - resized.minY) / (drawn.maxY - drawn.minY),
+    };
+    if (growth.x < MIN_GROWTH || growth.y < MIN_GROWTH) {
+      fail(`${label}: grew ${growth.x.toFixed(2)}x${growth.y.toFixed(2)}, want about 2`);
+    }
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const reloadedShot = await shot("reloaded");
+    const reloaded = await measure(blank, "reloaded");
+    for (const side of ["minX", "minY", "maxX", "maxY"]) {
+      if (Math.abs(reloaded[side] - resized[side]) > BBOX_TOLERANCE_PX) {
+        fail(`${label}: ${side} ${reloaded[side]} after reload, ${resized[side]} before`);
+      }
+    }
+    check();
+    return {
+      growth: [Number(growth.x.toFixed(2)), Number(growth.y.toFixed(2))],
+      screenshots: [selected.path, middle?.path, resizedSelected.path, reloadedShot.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -797,6 +958,23 @@ const main = async () => {
         `PASS shapes ${device}: 4 shapes kept after a move and reload, ink ${shapes.ink.join(" ")}`,
       );
       for (const path of shapes.screenshots) console.log(`  ${path}`);
+    }
+    for (const device of SHAPE_DEVICES) {
+      for (const object of RESIZE_OBJECTS) {
+        const resize = await smokeResize({
+          browser,
+          devices,
+          analyser,
+          url: siblingBoard(options.url),
+          dir,
+          device,
+          object,
+        });
+        console.log(
+          `PASS resize ${object} ${device}: grew ${resize.growth.join("x")}, bbox kept after reload`,
+        );
+        for (const path of resize.screenshots) console.log(`  ${path}`);
+      }
     }
   } finally {
     await browser.close();
