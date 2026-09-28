@@ -1,15 +1,15 @@
 import { MAX_STICKY_BYTES } from "@stallion/schema";
 import type { RefObject } from "preact";
 import { useEffect, useLayoutEffect, useRef } from "preact/hooks";
-import { STICKY_FONT_FAMILY } from "./sticky";
-import type { StickyEdit } from "./surface";
+import type { TextEdit } from "./surface";
+import { FONT_FAMILY } from "./wrap";
 
 export const KEYBOARD_GAP_PX = 12;
 
 const DONE_ROW_PX = 52;
 
 type TextEditorProps = {
-  edit: StickyEdit | undefined;
+  edit: TextEdit | undefined;
   areaRef: RefObject<HTMLTextAreaElement>;
   onInput: (text: string) => void;
   onDone: () => void;
@@ -80,13 +80,13 @@ export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditor
       <textarea
         ref={areaRef}
         class="sticky-text"
-        aria-label="Note text"
+        aria-label={edit?.label ?? "Note text"}
         spellcheck
         maxLength={MAX_STICKY_BYTES}
         tabIndex={edit ? 0 : -1}
         style={
           edit && {
-            font: `${edit.fontPx}px ${STICKY_FONT_FAMILY}`,
+            font: `${edit.fontPx}px ${FONT_FAMILY}`,
             lineHeight: `${edit.lineHeightPx}px`,
             padding: `${edit.padPx}px`,
             color: edit.ink,

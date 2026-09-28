@@ -52,22 +52,18 @@ const sticky: StallionObject = {
   text: "Buy milk\nand a very long line that wraps",
 };
 
-const objects: StallionObject[] = [
-  stroke,
-  shape,
-  sticky,
-  {
-    type: "Text",
-    objectId: "text-0001",
-    nativeZoom: 40,
-    bbox: { minX: 1, minY: 2, maxX: 3, maxY: 4 },
-    colour: 0,
-    rgb: 0x1f2328,
-    size: "Small",
-    width: 3,
-    text: "hello",
-  },
-];
+const text: StallionObject = {
+  type: "Text",
+  objectId: "text-0001",
+  nativeZoom: -2,
+  bbox: { minX: 12, minY: -8, maxX: 92, maxY: 23.2 },
+  rgb: 0xe5484d,
+  width: 24,
+  wrapWidth: 160,
+  text: "Plain text that wraps\nover lines",
+};
+
+const objects: StallionObject[] = [stroke, shape, sticky, text];
 
 const raw = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSize: true });
 
@@ -98,6 +94,10 @@ test("matches the golden shape fixture", async () => {
 
 test("matches the golden sticky fixture", async () => {
   await expect(hex(encode(sticky))).toMatchFileSnapshot("../fixtures/sticky.cbor.hex");
+});
+
+test("matches the golden text fixture", async () => {
+  await expect(hex(encode(text))).toMatchFileSnapshot("../fixtures/text.cbor.hex");
 });
 
 test("round-trips an empty sticky", () => {
@@ -161,6 +161,12 @@ test.each([
   ["a sticky font below 0.5", { ...sticky, width: 0.25 }],
   ["a sticky with a colour index", { ...sticky, colour: 0 }],
   ["a sticky with text over 4096", { ...sticky, text: "x".repeat(4097) }],
+  ["an empty text", { ...text, text: "" }],
+  ["a text with a colour index", { ...text, colour: 0 }],
+  ["a text without a wrap width", { ...text, wrapWidth: undefined }],
+  ["a text wrap width of zero", { ...text, wrapWidth: 0 }],
+  ["a text wrap width wider than its tile", { ...text, wrapWidth: 256.5 }],
+  ["a text font above 96", { ...text, width: 97 }],
 ])("rejects %s", (_, invalid) => {
   expect(stallionObject.safeParse(invalid).success).toBe(false);
   expect(decode(raw.encode(invalid))).toMatchObject({ ok: false });

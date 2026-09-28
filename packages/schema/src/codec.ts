@@ -10,9 +10,8 @@ export type DecodeResult = { ok: true; value: StallionObject } | { ok: false; er
 const cbor = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSize: true });
 
 const normalise = (object: StallionObject): StallionObject => {
-  if (object.type === "Sticky") return object;
-  const complete = withWidth(withRgb(object));
-  return complete.type === "Text" ? complete : withStyle(complete);
+  if (object.type === "Sticky" || object.type === "Text") return object;
+  return withStyle(withWidth(withRgb(object)));
 };
 
 const describeErrors = (): string =>

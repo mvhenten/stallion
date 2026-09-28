@@ -12,9 +12,9 @@ import { errorMessage, reportLink } from "./report";
 import { boardLink, SharePanel } from "./share";
 import {
   createSurface,
-  type StickyEdit,
   type Surface,
   type SurfaceView,
+  type TextEdit,
   type Tool,
   type ToolMode,
 } from "./surface";
@@ -54,6 +54,7 @@ const SURFACE_CLASS: Record<ToolMode, string> = {
   Pencil: "surface",
   Shape: "surface",
   Sticky: "surface",
+  Text: "surface",
   Pan: "surface panning",
   Eraser: "surface erasing",
   Select: "surface selecting",
@@ -77,10 +78,10 @@ export function Board({ boardId }: { boardId: string }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [presence, setPresence] = useState<Presence>(NO_PRESENCE);
   const [name, setName] = useState(() => storedName(boardId));
-  const [edit, setEdit] = useState<StickyEdit | undefined>(undefined);
+  const [edit, setEdit] = useState<TextEdit | undefined>(undefined);
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const editRef = useRef<StickyEdit | undefined>(undefined);
-  const onEdit = useCallback((next: StickyEdit | undefined) => {
+  const editRef = useRef<TextEdit | undefined>(undefined);
+  const onEdit = useCallback((next: TextEdit | undefined) => {
     const previous = editRef.current;
     editRef.current = next;
     if (next && next.objectId !== previous?.objectId) openEditor(editorRef.current, next.text);

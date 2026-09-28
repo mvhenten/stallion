@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
-import { MAX_STICKY_BYTES } from "./sticky";
+import { MAX_STICKY_BYTES, MAX_WRAP_WIDTH } from "./sticky";
 import { DEFAULT_STROKE_STYLE, STROKE_STYLES } from "./style";
 import { MAX_WIDTH, MIN_WIDTH } from "./width";
 
@@ -63,11 +63,10 @@ export const text = z.strictObject({
   objectId,
   nativeZoom,
   bbox,
-  colour,
-  rgb: rgb.optional(),
-  size: pencilSize,
-  width: width.optional(),
-  text: z.string().min(1).max(4096),
+  rgb,
+  width,
+  wrapWidth: z.number().gt(0).max(MAX_WRAP_WIDTH),
+  text: z.string().min(1).max(MAX_STICKY_BYTES),
 });
 
 export const sticky = z.strictObject({

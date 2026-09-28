@@ -282,28 +282,20 @@
           ],
           "additionalProperties": false
         },
-        "colour": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 5
-        },
         "rgb": {
           "type": "integer",
           "minimum": 0,
           "maximum": 16777215
         },
-        "size": {
-          "type": "string",
-          "enum": [
-            "Small",
-            "Medium",
-            "Large"
-          ]
-        },
         "width": {
           "type": "number",
           "minimum": 0.5,
           "maximum": 96
+        },
+        "wrapWidth": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 256
         },
         "text": {
           "type": "string",
@@ -316,8 +308,9 @@
         "objectId",
         "nativeZoom",
         "bbox",
-        "colour",
-        "size",
+        "rgb",
+        "width",
+        "wrapWidth",
         "text"
       ],
       "additionalProperties": false

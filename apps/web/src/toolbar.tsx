@@ -437,6 +437,19 @@ export function Toolbar({
         <Icon d="M4 4h16v10l-6 6H4zM14 20v-6h6" join />
       </button>
     ),
+    Text: () => (
+      <button
+        key="Text"
+        type="button"
+        class="tool"
+        aria-pressed={tool.mode === "Text"}
+        aria-label="Text tool"
+        title="Tap to place text in the current colour, tap text to edit it"
+        onClick={() => toggleMode("Text")}
+      >
+        <Icon d="M5 6V4h14v2M12 4v16M9 20h6" join />
+      </button>
+    ),
     Pan: () => (
       <button
         key="Pan"
@@ -457,7 +470,7 @@ export function Toolbar({
         class="tool"
         aria-pressed={tool.mode === "Select"}
         aria-label="Select tool"
-        title="Tap a stroke, shape or note to select it, drag to move it, Delete to remove it; tap a note to edit its text"
+        title="Tap a stroke, shape, note or text to select it, drag to move it, Delete to remove it; tap a note or text to edit it"
         onClick={() => toggleMode("Select")}
       >
         <Icon d="M5 3l14 8-6 2-3 6-5-16z" join />

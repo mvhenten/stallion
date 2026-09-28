@@ -1052,6 +1052,142 @@ const smokeSticky = async ({ browser, devices, analyser, url, dir, device }) => 
   }
 };
 
+const TEXT_COLOUR = "Colour 2";
+const TEXT_RGB = [0xe5, 0x48, 0x4d];
+const TEXT_FIRST = "Plain text";
+const TEXT_MORE = " edited with a tail long enough to wrap past the width";
+const MIN_TEXT_LINES = 2;
+
+const inkLines = (analyser, png, ink) =>
+  analyser.evaluate(
+    async ([b64, fg]) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0);
+      const { width, height, data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+      let lines = 0;
+      let inLine = false;
+      let inkPixels = 0;
+      for (let y = 0; y < height; y++) {
+        let row = false;
+        for (let x = 0; x < width; x++) {
+          const i = (y * width + x) * 4;
+          const distance =
+            Math.abs(data[i] - fg[0]) +
+            Math.abs(data[i + 1] - fg[1]) +
+            Math.abs(data[i + 2] - fg[2]);
+          if (distance > 90) continue;
+          row = true;
+          inkPixels++;
+        }
+        if (row && !inLine) lines++;
+        inLine = row;
+      }
+      return { lines, inkPixels };
+    },
+    [png.toString("base64"), ink],
+  );
+
+const smokeText = async ({ browser, devices, analyser, url, dir, device }) => {
+  const label = `text ${device}`;
+  const context = await browser.newContext({ ...devices[device], colorScheme: "light" });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`${label}: ${problems[0]}`);
+  };
+  const prefix = `text-${device.toLowerCase().replace(/\W+/g, "-")}`;
+  const shot = async (name, clip) => {
+    const path = join(dir, `${prefix}-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  const measure = async (clip, stage, minLines) => {
+    const text = await inkLines(analyser, (await shot(`${stage}-text`, clip)).buffer, TEXT_RGB);
+    if (text.lines < minLines) {
+      fail(`${label}: ${text.lines} text lines ${stage}, want at least ${minLines}`);
+    }
+    return text;
+  };
+  const editor = page.locator(".sticky-editor:not(.idle) textarea");
+  const commit = async () => {
+    await page.getByRole("button", { name: "Done" }).tap();
+    await page.waitForTimeout(800);
+    if (await editor.isVisible()) fail(`${label}: the editor stayed open after Done`);
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    await palette.getByRole("button", { name: TEXT_COLOUR, exact: true }).tap();
+    await palette.getByRole("button", { name: "Text tool" }).tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    await page.locator(PALETTE).waitFor({ state: "hidden", timeout: 5000 });
+    const fewer = page.getByRole("button", { name: "Fewer tools" });
+    if (await fewer.isVisible()) await fewer.tap();
+    await page.waitForTimeout(300);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const at = {
+      x: Math.round(Math.max(24, viewport.width / 2 - 160)),
+      y: Math.round(viewport.height * 0.3),
+    };
+    const clip = {
+      x: at.x - 8,
+      y: at.y - 30,
+      width: Math.min(340, viewport.width - (at.x - 8)),
+      height: 300,
+    };
+    await drawWithTouch(page, [at]);
+    await editor.waitFor({ state: "visible", timeout: 5000 });
+    const focused = await editor.evaluate((element) => element === document.activeElement);
+    if (!focused) fail(`${label}: the text editor opened without focus`);
+    await page.keyboard.type(TEXT_FIRST);
+    await page.waitForTimeout(300);
+    const placing = await shot("placing");
+    check();
+    await commit();
+    const placed = await measure(clip, "after placing", 1);
+    await drawWithTouch(page, [{ x: at.x + 20, y: at.y }]);
+    await editor.waitFor({ state: "visible", timeout: 5000 });
+    const current = await editor.inputValue();
+    if (current !== TEXT_FIRST) fail(`${label}: the editor opened with "${current}"`);
+    await page.keyboard.type(TEXT_MORE);
+    await page.waitForTimeout(300);
+    const editing = await shot("editing");
+    await commit();
+    const committed = await shot("committed");
+    const edited = await measure(clip, "after editing", MIN_TEXT_LINES);
+    if (edited.inkPixels <= placed.inkPixels) fail(`${label}: the edit drew no more text`);
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const reloaded = await shot("reloaded");
+    const kept = await measure(clip, "after reload", MIN_TEXT_LINES);
+    if (kept.lines !== edited.lines) {
+      fail(`${label}: ${kept.lines} text lines after reload, ${edited.lines} before`);
+    }
+    const counts = await countStoredRows(page);
+    if ((counts.tiles ?? 0) === 0) fail(`${label}: no tile stored in IndexedDB after reload`);
+    check();
+    return {
+      lines: kept.lines,
+      screenshots: [placing.path, editing.path, committed.path, reloaded.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -1141,6 +1277,18 @@ const main = async () => {
         `PASS sticky ${device}: two long lines wrap to ${sticky.lines} lines, kept after reload`,
       );
       for (const path of sticky.screenshots) console.log(`  ${path}`);
+    }
+    for (const device of SHAPE_DEVICES) {
+      const text = await smokeText({
+        browser,
+        devices,
+        analyser,
+        url: siblingBoard(options.url),
+        dir,
+        device,
+      });
+      console.log(`PASS text ${device}: placed, edited to ${text.lines} lines, kept after reload`);
+      for (const path of text.screenshots) console.log(`  ${path}`);
     }
   } finally {
     await browser.close();

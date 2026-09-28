@@ -8,7 +8,7 @@ import {
   segmentDistance,
   type Tile,
 } from "@stallion/geometry";
-import { FILLABLE, type Shape, type Sticky, type Stroke, widthOf } from "@stallion/schema";
+import { FILLABLE, type Shape, type Stroke, widthOf } from "@stallion/schema";
 import { shapeWorldPoints } from "./shape";
 import { strokeWorldWidth } from "./stroke";
 
@@ -78,5 +78,5 @@ export const hitsShape = (tile: Tile, shape: Shape, world: Point, zoom: number):
   );
 };
 
-export const hitsSticky = (sticky: Sticky, world: Point, zoom: number): boolean =>
-  contains(grow(sticky.bbox, ERASER_TOLERANCE_PX / zoom), pointBox(world));
+export const hitsFrame = (object: { bbox: BBox }, world: Point, zoom: number): boolean =>
+  contains(grow(object.bbox, ERASER_TOLERANCE_PX / zoom), pointBox(world));

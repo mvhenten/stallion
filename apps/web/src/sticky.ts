@@ -1,72 +1,26 @@
 import type { StoredObject } from "@stallion/client-store";
 import { type BBox, nativeLevel, type Point, place } from "@stallion/geometry";
-import { clampUtf8, MAX_WIDTH, MIN_WIDTH, rgbHex, type Sticky } from "@stallion/schema";
-import { newObjectId, type Scale, scaleAbout, strokeWorldWidth } from "./stroke";
-
-export const STICKY_FONT_FAMILY = "system-ui, sans-serif";
+import { clampUtf8, rgbHex, type Sticky } from "@stallion/schema";
+import { newObjectId, type Scale, scaleAbout } from "./stroke";
+import {
+  clampFont,
+  fontForScreen,
+  LINE_HEIGHT,
+  type Measure,
+  paintLines,
+  worldFont,
+  wrapWorld,
+} from "./wrap";
 
 export const STICKY_PX = 200;
 
 export const STICKY_FONT_PX = 18;
-
-export const LINE_HEIGHT = 1.3;
 
 export const PAD_EM = 0.6;
 
 export const DARK_INK = 0x1f2328;
 
 export const LIGHT_INK = 0xfbfaf7;
-
-const MEASURE_PX = 100;
-
-const MIN_TEXT_PX = 1.5;
-
-export type Measure = (text: string) => number;
-
-export const stickyFont = (px: number): string => `${px}px ${STICKY_FONT_FAMILY}`;
-
-export const measureText =
-  (ctx: CanvasRenderingContext2D, px: number): Measure =>
-  (text) => {
-    ctx.font = stickyFont(px);
-    return ctx.measureText(text).width;
-  };
-
-const breakWord = (word: string, maxWidth: number, measure: Measure): string[] => {
-  const pieces: string[] = [];
-  let piece = "";
-  for (const char of word) {
-    if (piece !== "" && measure(piece + char) > maxWidth) {
-      pieces.push(piece);
-      piece = char;
-      continue;
-    }
-    piece += char;
-  }
-  if (piece !== "") pieces.push(piece);
-  return pieces;
-};
-
-export const wrapText = (text: string, maxWidth: number, measure: Measure): string[] => {
-  const lines: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    let line = "";
-    for (const token of paragraph.match(/\s*\S+\s*|\s+/g) ?? []) {
-      if (measure((line + token).trimEnd()) <= maxWidth) {
-        line += token;
-        continue;
-      }
-      if (line.trimEnd() !== "") lines.push(line.trimEnd());
-      line = "";
-      const pieces = breakWord(token.trimEnd(), maxWidth, measure);
-      const last = pieces.pop() ?? "";
-      lines.push(...pieces);
-      line = last + token.slice(token.trimEnd().length);
-    }
-    lines.push(line.trimEnd());
-  }
-  return lines;
-};
 
 const channels = (rgb: number): [number, number, number] => [
   (rgb >> 16) & 0xff,
@@ -79,15 +33,12 @@ export const readableInk = (background: number): number => {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? DARK_INK : LIGHT_INK;
 };
 
-export const stickyWorldFont = (sticky: Pick<Sticky, "width" | "nativeZoom">): number =>
-  strokeWorldWidth(sticky.width, sticky.nativeZoom);
-
 export type StickyMetrics = { font: number; pad: number; lineHeight: number; inner: number };
 
 export const stickyMetrics = (
   sticky: Pick<Sticky, "width" | "nativeZoom" | "bbox">,
 ): StickyMetrics => {
-  const font = stickyWorldFont(sticky);
+  const font = worldFont(sticky);
   const pad = font * PAD_EM;
   return {
     font,
@@ -99,7 +50,7 @@ export const stickyMetrics = (
 
 export const stickyLines = (sticky: Sticky, measureAt: (px: number) => Measure): string[] => {
   const { font, inner } = stickyMetrics(sticky);
-  return wrapText(sticky.text, (inner / font) * MEASURE_PX, measureAt(MEASURE_PX));
+  return wrapWorld(sticky.text, inner, font, measureAt);
 };
 
 const fitHeight = (sticky: Sticky, measureAt: (px: number) => Measure): Sticky => {
@@ -114,8 +65,6 @@ const placeSticky = (sticky: Sticky): StoredObject | undefined => {
   const placed = place(sticky.bbox);
   return placed.ok ? { tile: placed.tile, object: sticky } : undefined;
 };
-
-const clampFont = (width: number): number => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
 
 export const newSticky = (background: number, zoom: number, centre: Point): Sticky => {
   const nativeZoom = nativeLevel(zoom);
@@ -132,7 +81,7 @@ export const newSticky = (background: number, zoom: number, centre: Point): Stic
     },
     rgb: readableInk(background),
     background,
-    width: clampFont(STICKY_FONT_PX / strokeWorldWidth(1, nativeZoom) / zoom),
+    width: fontForScreen(STICKY_FONT_PX, nativeZoom, zoom),
     text: "",
   };
 };
@@ -191,18 +140,18 @@ export const paintSticky = (
 ): void => {
   ctx.fillStyle = rgbHex(sticky.background);
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
-  const { font, pad, lineHeight } = stickyMetrics(sticky);
-  const px = font * zoom;
-  if (!showText || px < MIN_TEXT_PX) return;
+  if (!showText) return;
+  const { font, pad } = stickyMetrics(sticky);
   ctx.save();
   ctx.beginPath();
   ctx.rect(rect.x, rect.y, rect.width, rect.height);
   ctx.clip();
-  ctx.fillStyle = rgbHex(sticky.rgb);
-  ctx.font = stickyFont(px);
-  ctx.textBaseline = "middle";
-  lines.forEach((line, index) => {
-    ctx.fillText(line, rect.x + pad * zoom, rect.y + (pad + (index + 0.5) * lineHeight) * zoom);
-  });
+  paintLines(
+    ctx,
+    lines,
+    { x: rect.x + pad * zoom, y: rect.y + pad * zoom },
+    font * zoom,
+    rgbHex(sticky.rgb),
+  );
   ctx.restore();
 };

@@ -1,5 +1,7 @@
 export const MAX_STICKY_BYTES = 4096;
 
+export const MAX_WRAP_WIDTH = 256;
+
 const utf8 = new TextEncoder();
 
 export const utf8Length = (text: string): number => utf8.encode(text).length;

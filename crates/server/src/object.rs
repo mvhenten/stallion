@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const MAX_POINTS: usize = 4096;
-pub const MAX_TEXT: usize = 4096;
+pub const MAX_TEXT_BYTES: usize = 4096;
+pub const MAX_WRAP_WIDTH: f64 = 256.0;
 pub const MAX_STICKY_BYTES: usize = 4096;
 pub const MAX_OBJECT_ID: usize = 64;
 pub const ZOOM_RANGE: std::ops::RangeInclusive<i32> = -40..=40;
@@ -99,12 +100,9 @@ pub struct Text {
     pub object_id: String,
     pub native_zoom: i32,
     pub bbox: Bbox,
-    pub colour: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rgb: Option<u32>,
-    pub size: PencilSize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width: Option<f64>,
+    pub rgb: u32,
+    pub width: f64,
+    pub wrap_width: f64,
     pub text: String,
 }
 
@@ -169,9 +167,9 @@ impl StallionObject {
                 object_id: &o.object_id,
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
-                colour: Some(o.colour),
-                rgb: o.rgb,
-                width: o.width,
+                colour: None,
+                rgb: Some(o.rgb),
+                width: Some(o.width),
             },
             StallionObject::Sticky(o) => Common {
                 object_id: &o.object_id,
@@ -229,9 +227,17 @@ impl StallionObject {
                 Ok(())
             }
             StallionObject::Text(t) => {
-                let len = t.text.encode_utf16().count();
-                if len == 0 || len > MAX_TEXT {
-                    return Err(format!("text length {len} is outside 1..{MAX_TEXT}"));
+                if !(t.wrap_width > 0.0 && t.wrap_width <= MAX_WRAP_WIDTH) {
+                    return Err(format!(
+                        "wrapWidth {} is outside 0..{MAX_WRAP_WIDTH}",
+                        t.wrap_width
+                    ));
+                }
+                let len = t.text.len();
+                if len == 0 || len > MAX_TEXT_BYTES {
+                    return Err(format!(
+                        "text of {len} bytes is outside 1..{MAX_TEXT_BYTES}"
+                    ));
                 }
                 Ok(())
             }
@@ -298,6 +304,12 @@ pub(crate) mod tests {
     fn sticky_fixture() -> Vec<u8> {
         from_hex(include_str!(
             "../../../packages/schema/fixtures/sticky.cbor.hex"
+        ))
+    }
+
+    fn text_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/text.cbor.hex"
         ))
     }
 
@@ -536,6 +548,89 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .contains("width")
         );
+    }
+
+    fn golden_text() -> Text {
+        Text {
+            object_id: "text-0001".into(),
+            native_zoom: -2,
+            bbox: Bbox {
+                min_x: 12.0,
+                min_y: -8.0,
+                max_x: 92.0,
+                max_y: 23.2,
+            },
+            rgb: 0xE5_484D,
+            width: 24.0,
+            wrap_width: 160.0,
+            text: "Plain text that wraps\nover lines".into(),
+        }
+    }
+
+    #[test]
+    fn decodes_the_golden_text_fixture() {
+        assert_eq!(
+            decode(&text_fixture()),
+            Ok(StallionObject::Text(golden_text()))
+        );
+    }
+
+    #[test]
+    fn bounds_text_bytes_font_and_wrap_width() {
+        let at_limit = StallionObject::Text(Text {
+            text: "é".repeat(MAX_TEXT_BYTES / 2),
+            wrap_width: MAX_WRAP_WIDTH,
+            ..golden_text()
+        });
+        assert_eq!(decode(&encode(at_limit.clone())), Ok(at_limit));
+        let rejected = [
+            (
+                Text {
+                    text: String::new(),
+                    ..golden_text()
+                },
+                "bytes",
+            ),
+            (
+                Text {
+                    text: "é".repeat(MAX_TEXT_BYTES / 2) + "x",
+                    ..golden_text()
+                },
+                "bytes",
+            ),
+            (
+                Text {
+                    width: 96.5,
+                    ..golden_text()
+                },
+                "width",
+            ),
+            (
+                Text {
+                    wrap_width: 0.0,
+                    ..golden_text()
+                },
+                "wrapWidth",
+            ),
+            (
+                Text {
+                    wrap_width: 256.5,
+                    ..golden_text()
+                },
+                "wrapWidth",
+            ),
+            (
+                Text {
+                    wrap_width: f64::NAN,
+                    ..golden_text()
+                },
+                "wrapWidth",
+            ),
+        ];
+        for (text, reason) in rejected {
+            let error = decode(&encode(StallionObject::Text(text))).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
     }
 
     #[test]
