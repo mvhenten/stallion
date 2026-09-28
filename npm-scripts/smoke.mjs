@@ -900,6 +900,158 @@ const smokeResize = async ({ browser, devices, analyser, url, dir, device, objec
   }
 };
 
+const STICKY_COLOUR = "Colour 4";
+const STICKY_RGB = [0x30, 0xa4, 0x6c];
+const STICKY_INK = [0xfb, 0xfa, 0xf7];
+const STICKY_LINES = [
+  "First line that is much wider than the note",
+  "Second line that also runs past the edge",
+];
+const MIN_STICKY_LINES = 4;
+
+const noteText = (analyser, png, background, ink) =>
+  analyser.evaluate(
+    async ([b64, bg, fg]) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0);
+      const { width, height, data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+      const near = (i, rgb, limit) =>
+        Math.abs(data[i] - rgb[0]) +
+          Math.abs(data[i + 1] - rgb[1]) +
+          Math.abs(data[i + 2] - rgb[2]) <=
+        limit;
+      const box = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          if (!near((y * width + x) * 4, bg, 12)) continue;
+          box.minX = Math.min(box.minX, x);
+          box.minY = Math.min(box.minY, y);
+          box.maxX = Math.max(box.maxX, x);
+          box.maxY = Math.max(box.maxY, y);
+        }
+      }
+      if (!Number.isFinite(box.minX)) return { found: false, lines: 0 };
+      const inset = 8;
+      let lines = 0;
+      let inLine = false;
+      let inkPixels = 0;
+      for (let y = box.minY + inset; y <= box.maxY - inset; y++) {
+        let row = false;
+        for (let x = box.minX + inset; x <= box.maxX - inset; x++) {
+          if (!near((y * width + x) * 4, fg, 90)) continue;
+          row = true;
+          inkPixels++;
+        }
+        if (row && !inLine) lines++;
+        inLine = row;
+      }
+      return {
+        found: true,
+        lines,
+        inkPixels,
+        width: box.maxX - box.minX + 1,
+        height: box.maxY - box.minY + 1,
+      };
+    },
+    [png.toString("base64"), background, ink],
+  );
+
+const smokeSticky = async ({ browser, devices, analyser, url, dir, device }) => {
+  const label = `sticky ${device}`;
+  const context = await browser.newContext({ ...devices[device], colorScheme: "light" });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`${label}: ${problems[0]}`);
+  };
+  const prefix = `sticky-${device.toLowerCase().replace(/\W+/g, "-")}`;
+  const shot = async (name, clip) => {
+    const path = join(dir, `${prefix}-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  const measure = async (clip, stage) => {
+    const note = await noteText(
+      analyser,
+      (await shot(`${stage}-note`, clip)).buffer,
+      STICKY_RGB,
+      STICKY_INK,
+    );
+    if (!note.found) fail(`${label}: no note on the canvas ${stage}`);
+    if (note.lines < MIN_STICKY_LINES) {
+      fail(
+        `${label}: ${note.lines} text lines ${stage}, want at least ${MIN_STICKY_LINES} once wrapped`,
+      );
+    }
+    return note;
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    await palette.getByRole("button", { name: STICKY_COLOUR, exact: true }).tap();
+    await palette.getByRole("button", { name: "Sticky note" }).tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    await page.locator(PALETTE).waitFor({ state: "hidden", timeout: 5000 });
+    const fewer = page.getByRole("button", { name: "Fewer tools" });
+    if (await fewer.isVisible()) await fewer.tap();
+    await page.waitForTimeout(300);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const centre = { x: Math.round(viewport.width / 2), y: Math.round(viewport.height * 0.3) };
+    const clipX = Math.max(0, centre.x - 130);
+    const clip = {
+      x: clipX,
+      y: centre.y - 130,
+      width: Math.min(260, viewport.width - clipX),
+      height: 420,
+    };
+    await drawWithTouch(page, [centre]);
+    const editor = page.locator(".sticky-editor:not(.idle) textarea");
+    await editor.waitFor({ state: "visible", timeout: 5000 });
+    const focused = await editor.evaluate((element) => element === document.activeElement);
+    if (!focused) fail(`${label}: the note editor opened without focus`);
+    await page.keyboard.type(STICKY_LINES[0]);
+    await page.keyboard.press("Enter");
+    await page.keyboard.type(STICKY_LINES[1]);
+    await page.waitForTimeout(300);
+    const editing = await shot("editing");
+    check();
+    await page.getByRole("button", { name: "Done" }).tap();
+    await page.waitForTimeout(800);
+    if (await editor.isVisible()) fail(`${label}: the editor stayed open after Done`);
+    const committed = await shot("committed");
+    const drawn = await measure(clip, "after commit");
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const reloaded = await shot("reloaded");
+    const kept = await measure(clip, "after reload");
+    if (kept.lines !== drawn.lines) {
+      fail(`${label}: ${kept.lines} text lines after reload, ${drawn.lines} before`);
+    }
+    const counts = await countStoredRows(page);
+    if ((counts.tiles ?? 0) === 0) fail(`${label}: no tile stored in IndexedDB after reload`);
+    check();
+    return {
+      lines: kept.lines,
+      screenshots: [editing.path, committed.path, reloaded.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -975,6 +1127,20 @@ const main = async () => {
         );
         for (const path of resize.screenshots) console.log(`  ${path}`);
       }
+    }
+    for (const device of SHAPE_DEVICES) {
+      const sticky = await smokeSticky({
+        browser,
+        devices,
+        analyser,
+        url: siblingBoard(options.url),
+        dir,
+        device,
+      });
+      console.log(
+        `PASS sticky ${device}: two long lines wrap to ${sticky.lines} lines, kept after reload`,
+      );
+      for (const path of sticky.screenshots) console.log(`  ${path}`);
     }
   } finally {
     await browser.close();

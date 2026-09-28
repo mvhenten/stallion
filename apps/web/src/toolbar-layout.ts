@@ -24,6 +24,7 @@ export type Control =
   | "RecentColours"
   | "CurrentColour"
   | "Pencil"
+  | "Sticky"
   | "Pan"
   | "Select"
   | "Eraser"
@@ -43,6 +44,7 @@ const WIDE_ROW: readonly Control[] = [
   "Colours",
   "Pan",
   "Select",
+  "Sticky",
   "Eraser",
   "Swap",
   "Undo",
@@ -67,7 +69,7 @@ const EXPANDED_ROWS: readonly (readonly Control[])[] = [
   COLLAPSED_ROW,
   ["Sizes", "Pan", "Select", "Redo", "Share"],
   ["Colours", "Swap"],
-  ["Shapes", "Flip"],
+  ["Shapes", "Sticky", "Flip"],
 ];
 
 const PALETTE_ROWS: readonly (readonly Control[])[] = [
@@ -78,7 +80,7 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Shapes"],
   ["Colours"],
   ["CustomColour", "RecentColours"],
-  ["Swap", "Pan", "Select", "Eraser"],
+  ["Swap", "Pan", "Select", "Eraser", "Sticky"],
   ["Undo", "Redo"],
   ["Level", "Share"],
 ];

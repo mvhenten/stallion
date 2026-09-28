@@ -20,6 +20,7 @@ import {
   type Shape,
   type ShapeFill,
   type ShapeKind,
+  type Sticky,
   type Stroke,
   type StrokeStyle,
 } from "@stallion/schema";
@@ -35,7 +36,7 @@ import {
   zoomAt,
   zoomTo,
 } from "./camera";
-import { hitsShape, hitsStroke } from "./eraser";
+import { hitsShape, hitsSticky, hitsStroke } from "./eraser";
 import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
 import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
@@ -61,6 +62,17 @@ import {
   translateShape,
 } from "./shape";
 import {
+  type Measure,
+  measureText,
+  paintSticky,
+  scaleSticky,
+  startSticky,
+  stickyLines,
+  stickyMetrics,
+  translateSticky,
+  withText,
+} from "./sticky";
+import {
   continueDraft,
   type Draft,
   draftScreenInk,
@@ -79,7 +91,7 @@ import {
 } from "./stroke";
 import type { DrawingSource } from "./sync";
 
-export type ToolMode = "Pencil" | "Shape" | "Pan" | "Eraser" | "Select";
+export type ToolMode = "Pencil" | "Shape" | "Sticky" | "Pan" | "Eraser" | "Select";
 
 export type Tool = {
   width: number;
@@ -93,22 +105,28 @@ export type Tool = {
 
 type Entry =
   | { type: "Stroke"; tile: Tile; object: Stroke; frame: StrokeFrame; ink: StrokeInk }
-  | { type: "Shape"; tile: Tile; object: Shape; start: Point; end: Point };
+  | { type: "Shape"; tile: Tile; object: Shape; start: Point; end: Point }
+  | { type: "Sticky"; tile: Tile; object: Sticky; lines: string[] };
 
-const hits = (entry: Entry, world: Point, zoom: number): boolean =>
-  entry.type === "Stroke"
+const hits = (entry: Entry, world: Point, zoom: number): boolean => {
+  if (entry.type === "Sticky") return hitsSticky(entry.object, world, zoom);
+  return entry.type === "Stroke"
     ? hitsStroke(entry.tile, entry.object, world, zoom)
     : hitsShape(entry.tile, entry.object, world, zoom);
+};
 
-const translate = (entry: Entry, dx: number, dy: number): StoredObject | undefined =>
-  entry.type === "Stroke"
+const translate = (entry: Entry, dx: number, dy: number): StoredObject | undefined => {
+  if (entry.type === "Sticky") return translateSticky(entry.object, dx, dy);
+  return entry.type === "Stroke"
     ? translateStroke(entry.tile, entry.object, dx, dy)
     : translateShape(entry.tile, entry.object, dx, dy);
+};
 
 type Drag = { objectId: string; from: Point; dx: number; dy: number };
 
 const extent = (entry: Entry): BBox => {
   if (entry.type === "Stroke") return strokeExtent(entry.tile, entry.object);
+  if (entry.type === "Sticky") return entry.object.bbox;
   const { start, end } = entry;
   return {
     minX: Math.min(start.x, end.x),
@@ -118,10 +136,19 @@ const extent = (entry: Entry): BBox => {
   };
 };
 
-const scale = (entry: Entry, by: Scale): StoredObject | undefined =>
-  entry.type === "Stroke"
+const scale = (
+  entry: Entry,
+  by: Scale,
+  measureAt: (px: number) => Measure,
+): StoredObject | undefined => {
+  if (entry.type === "Sticky") return scaleSticky(entry.object, by, measureAt);
+  return entry.type === "Stroke"
     ? scaleStroke(entry.tile, entry.object, by)
     : scaleShape(entry.tile, entry.object, by);
+};
+
+const colourOf = (object: Entry["object"]): number =>
+  object.type === "Sticky" ? object.background : rgbOf(object);
 
 type Corner = { right: boolean; bottom: boolean };
 
@@ -223,9 +250,39 @@ const saveCamera = (boardId: string, camera: Camera): void => {
 
 export type SurfaceView = { level: number; contentLevels: readonly number[] };
 
+export type StickyEdit = {
+  objectId: string;
+  text: string;
+  ink: string;
+  background: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  fontPx: number;
+  padPx: number;
+  lineHeightPx: number;
+};
+
+const sameEdit = (a: StickyEdit | undefined, b: StickyEdit | undefined): boolean =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.objectId === b.objectId &&
+    a.ink === b.ink &&
+    a.background === b.background &&
+    a.left === b.left &&
+    a.top === b.top &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.fontPx === b.fontPx);
+
 export type Surface = {
   zoomToLevel(level: number): void;
   follow(clientId: number | undefined): void;
+  editText(text: string): void;
+  finishEdit(): void;
+  panBy(dx: number, dy: number): void;
   dispose(): void;
 };
 
@@ -239,6 +296,7 @@ export function createSurface(
   onView: (view: SurfaceView) => void = () => undefined,
   onCommit: () => void = () => undefined,
   onPresence: (presence: Presence) => void = () => undefined,
+  onEdit: (edit: StickyEdit | undefined) => void = () => undefined,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -253,6 +311,9 @@ export function createSurface(
   let selected: string | undefined;
   let drag: Drag | undefined;
   let resizing: Resize | undefined;
+  let stickyPress: { point: Point; secondary: boolean } | undefined;
+  let editing: { objectId: string; text: string } | undefined;
+  let reportedEdit: StickyEdit | undefined;
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -295,12 +356,33 @@ export function createSurface(
       const dragged = drag?.objectId === entry.object.objectId ? drag : undefined;
       const culled = dragged || resized ? "Draw" : cull(entry.object.bbox, view, camera.zoom);
       if (culled === "Skip") continue;
-      const colour = rgbHex(rgbOf(entry.object));
+      const colour = rgbHex(colourOf(entry.object));
       if (culled === "Marker") {
         markers.push({ ...toDevice(bboxCentre(entry.object.bbox)), style: colour });
         continue;
       }
       const offset = dragged ?? { dx: 0, dy: 0 };
+      if (entry.type === "Sticky") {
+        const { bbox } = entry.object;
+        const topLeft = worldToScreen(camera, {
+          x: bbox.minX + offset.dx,
+          y: bbox.minY + offset.dy,
+        });
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        paintSticky(
+          ctx,
+          entry.object,
+          entry.lines,
+          {
+            ...topLeft,
+            width: (bbox.maxX - bbox.minX) * camera.zoom,
+            height: (bbox.maxY - bbox.minY) * camera.zoom,
+          },
+          camera.zoom,
+          editing?.objectId !== entry.object.objectId,
+        );
+        continue;
+      }
       if (entry.type === "Shape") {
         const shift = (world: Point): Point =>
           worldToScreen(camera, { x: world.x + offset.dx, y: world.y + offset.dy });
@@ -356,6 +438,86 @@ export function createSurface(
     }
     renderSelection(dpr);
     if (cursors.length > 0) renderCursors(dpr);
+    reportEdit();
+  };
+
+  const editOf = (): StickyEdit | undefined => {
+    if (!editing) return undefined;
+    const original = entries.get(editing.objectId);
+    const entry =
+      resizing?.objectId === editing.objectId && resizing.preview ? resizing.preview : original;
+    if (entry?.type !== "Sticky") return undefined;
+    const { dx, dy } = drag?.objectId === editing.objectId ? drag : { dx: 0, dy: 0 };
+    const { object } = entry;
+    const { bbox } = object;
+    const metrics = stickyMetrics(object);
+    const rect = canvas.getBoundingClientRect();
+    const topLeft = worldToScreen(camera, { x: bbox.minX + dx, y: bbox.minY + dy });
+    return {
+      objectId: object.objectId,
+      text: editing.text,
+      ink: rgbHex(object.rgb),
+      background: rgbHex(object.background),
+      left: rect.left + topLeft.x,
+      top: rect.top + topLeft.y,
+      width: (bbox.maxX - bbox.minX) * camera.zoom,
+      height: (bbox.maxY - bbox.minY) * camera.zoom,
+      fontPx: metrics.font * camera.zoom,
+      padPx: metrics.pad * camera.zoom,
+      lineHeightPx: metrics.lineHeight * camera.zoom,
+    };
+  };
+
+  const reportEdit = () => {
+    const next = editOf();
+    if (sameEdit(reportedEdit, next)) return;
+    reportedEdit = next;
+    onEdit(next);
+  };
+
+  const startEdit = (objectId: string) => {
+    if (editing?.objectId === objectId) return;
+    const entry = entries.get(objectId);
+    editing = { objectId, text: entry?.type === "Sticky" ? entry.object.text : "" };
+    selected = objectId;
+    reportEdit();
+    requestRender();
+  };
+
+  const finishEdit = () => {
+    if (!editing) return;
+    const { objectId, text } = editing;
+    editing = undefined;
+    const entry = entries.get(objectId);
+    if (entry?.type === "Sticky" && text !== entry.object.text) {
+      const stored = withText(entry.object, text, measureAt);
+      if (stored) {
+        source.commit(stored);
+        source.history.checkpoint();
+        onCommit();
+      }
+    }
+    reportEdit();
+    requestRender();
+  };
+
+  const placeSticky = (press: { point: Point; secondary: boolean }) => {
+    const hit = pick(press.point);
+    if (hit?.type === "Sticky") {
+      startEdit(hit.object.objectId);
+      return;
+    }
+    const tool = currentTool();
+    const stored = startSticky(
+      press.secondary ? tool.secondary : tool.primary,
+      camera.zoom,
+      screenToWorld(camera, press.point),
+    );
+    if (!stored) return;
+    source.commit(stored);
+    source.history.checkpoint();
+    onCommit();
+    startEdit(stored.object.objectId);
   };
 
   const renderMarkers = (markers: Iterable<Marker>) => {
@@ -463,7 +625,12 @@ export function createSurface(
     publishViewport();
   };
 
+  const measureAt = (px: number): Measure => measureText(ctx, px);
+
   const entryOf = ({ tile, object }: StoredObject): Entry | undefined => {
+    if (object.type === "Sticky") {
+      return { type: "Sticky", tile, object, lines: stickyLines(object, measureAt) };
+    }
     if (object.type === "Shape") {
       return { type: "Shape", tile, object, ...shapeWorldPoints(tile, object) };
     }
@@ -538,7 +705,15 @@ export function createSurface(
     const moved = drag;
     drag = undefined;
     const entry = moved && entries.get(moved.objectId);
-    if (!moved || !entry || (moved.dx === 0 && moved.dy === 0)) return;
+    if (!moved || !entry) return;
+    if (
+      entry.type === "Sticky" &&
+      Math.hypot(moved.dx, moved.dy) * camera.zoom < DRAG_THRESHOLD_PX
+    ) {
+      startEdit(entry.object.objectId);
+      return;
+    }
+    if (moved.dx === 0 && moved.dy === 0) return;
     const stored = translate(entry, moved.dx, moved.dy);
     if (stored) source.commit(stored);
   };
@@ -569,7 +744,7 @@ export function createSurface(
       sx: factor(corner.x + world.x - from.x - anchor.x, corner.x - anchor.x),
       sy: factor(corner.y + world.y - from.y - anchor.y, corner.y - anchor.y),
     };
-    const result = by.sx === 1 && by.sy === 1 ? undefined : scale(entry, by);
+    const result = by.sx === 1 && by.sy === 1 ? undefined : scale(entry, by, measureAt);
     resizing = { ...resizing, result, preview: result && entryOf(result) };
   };
 
@@ -581,6 +756,7 @@ export function createSurface(
 
   const discard = (objectId: string) => {
     if (selected === objectId && !source.objects.has(objectId)) selected = undefined;
+    if (editing?.objectId === objectId && !source.objects.has(objectId)) editing = undefined;
     const entry = entries.get(objectId);
     if (!entry) return;
     entries.delete(objectId);
@@ -785,7 +961,12 @@ export function createSurface(
     for (const effect of effects) {
       switch (effect.type) {
         case "StartStroke": {
+          finishEdit();
           const tool = currentTool();
+          if (tool.mode === "Sticky") {
+            stickyPress = { point: effect.point, secondary: effect.secondary };
+            break;
+          }
           if (tool.mode === "Select") {
             startDrag(effect.point);
             break;
@@ -835,16 +1016,21 @@ export function createSurface(
           }
           break;
         }
-        case "CommitStroke":
+        case "CommitStroke": {
           eraser = undefined;
+          const press = stickyPress;
+          stickyPress = undefined;
+          if (press) placeSticky(press);
           drop();
           finishResize();
           commit();
           commitShape();
           source.history.checkpoint();
           break;
+        }
         case "DiscardStroke":
           eraser = undefined;
+          stickyPress = undefined;
           drag = undefined;
           resizing = undefined;
           draft = undefined;
@@ -956,7 +1142,8 @@ export function createSurface(
   const onPointerMove = (event: PointerEvent) => shareCursor(localPoint(event));
 
   const onKey = (event: KeyboardEvent) => {
-    if (event.target instanceof HTMLInputElement) return;
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+      return;
     if (event.type === "keydown" && (event.key === "Delete" || event.key === "Backspace")) {
       if (selected === undefined || currentTool().mode !== "Select") return;
       event.preventDefault();
@@ -1022,6 +1209,14 @@ export function createSurface(
       }
       stopAnimation();
       follow.start(clientId);
+    },
+    editText(text) {
+      if (editing) editing = { ...editing, text };
+    },
+    finishEdit,
+    panBy(dx, dy) {
+      follow.stop();
+      moveCamera(pan(camera, dx, dy));
     },
     dispose() {
       clearTimeout(settleTimer);

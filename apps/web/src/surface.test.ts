@@ -1,12 +1,12 @@
 import type { StoredObject } from "@stallion/client-store";
 import type { LiveObjects } from "@stallion/client-sync";
-import type { Shape } from "@stallion/schema";
+import type { Shape, Stroke } from "@stallion/schema";
 import { afterEach, expect, test, vi } from "vitest";
 import { shapeBounds, shapeLook, shapeWorldPoints } from "./shape";
 import { createSurface, INK_ALPHA, PAPER, type Tool } from "./surface";
 import type { Awareness, DrawingSource } from "./sync";
 
-const stored: StoredObject = {
+const stored: StoredObject & { object: Stroke } = {
   tile: { level: 0, tx: 0, ty: 0 },
   object: {
     type: "Stroke",

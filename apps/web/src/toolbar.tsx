@@ -424,6 +424,19 @@ export function Toolbar({
         <Icon d="M4 20l1-5L16 4l4 4L9 19l-5 1zM14 6l4 4" join />
       </button>
     ),
+    Sticky: () => (
+      <button
+        key="Sticky"
+        type="button"
+        class="tool"
+        aria-pressed={tool.mode === "Sticky"}
+        aria-label="Sticky note"
+        title="Tap to place a note in the current colour, tap a note to write on it"
+        onClick={() => toggleMode("Sticky")}
+      >
+        <Icon d="M4 4h16v10l-6 6H4zM14 20v-6h6" join />
+      </button>
+    ),
     Pan: () => (
       <button
         key="Pan"
@@ -444,7 +457,7 @@ export function Toolbar({
         class="tool"
         aria-pressed={tool.mode === "Select"}
         aria-label="Select tool"
-        title="Tap a stroke or shape to select it, drag to move it, Delete to remove it"
+        title="Tap a stroke, shape or note to select it, drag to move it, Delete to remove it; tap a note to edit its text"
         onClick={() => toggleMode("Select")}
       >
         <Icon d="M5 3l14 8-6 2-3 6-5-16z" join />

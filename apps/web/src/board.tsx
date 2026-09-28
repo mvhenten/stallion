@@ -10,8 +10,16 @@ import { useConnectionNotice } from "./reconnect";
 import { ReconnectNotice } from "./reconnect-notice";
 import { errorMessage, reportLink } from "./report";
 import { boardLink, SharePanel } from "./share";
-import { createSurface, type Surface, type SurfaceView, type Tool, type ToolMode } from "./surface";
+import {
+  createSurface,
+  type StickyEdit,
+  type Surface,
+  type SurfaceView,
+  type Tool,
+  type ToolMode,
+} from "./surface";
 import { type BoardSource, type Connection, openSource, syncUrlFor } from "./sync";
+import { openEditor, TextEditor } from "./text-editor";
 import { captureThumbnail } from "./thumbnail";
 import { type HistoryState, Toolbar } from "./toolbar";
 import { loadStyle } from "./toolbar-layout";
@@ -45,6 +53,7 @@ const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
 const SURFACE_CLASS: Record<ToolMode, string> = {
   Pencil: "surface",
   Shape: "surface",
+  Sticky: "surface",
   Pan: "surface panning",
   Eraser: "surface erasing",
   Select: "surface selecting",
@@ -68,6 +77,19 @@ export function Board({ boardId }: { boardId: string }) {
   const [shareOpen, setShareOpen] = useState(false);
   const [presence, setPresence] = useState<Presence>(NO_PRESENCE);
   const [name, setName] = useState(() => storedName(boardId));
+  const [edit, setEdit] = useState<StickyEdit | undefined>(undefined);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+  const editRef = useRef<StickyEdit | undefined>(undefined);
+  const onEdit = useCallback((next: StickyEdit | undefined) => {
+    const previous = editRef.current;
+    editRef.current = next;
+    if (next && next.objectId !== previous?.objectId) openEditor(editorRef.current, next.text);
+    if (!next && previous) editorRef.current?.blur();
+    setEdit(next);
+  }, []);
+  const editText = useCallback((text: string) => surfaceRef.current?.editText(text), []);
+  const finishEdit = useCallback(() => surfaceRef.current?.finishEdit(), []);
+  const panBy = useCallback((dx: number, dy: number) => surfaceRef.current?.panBy(dx, dy), []);
   const sourceRef = useRef<BoardSource | undefined>(undefined);
   const surfaceRef = useRef<Surface | undefined>(undefined);
   const toolRef = useRef(tool);
@@ -124,7 +146,8 @@ export function Board({ boardId }: { boardId: string }) {
       setHistory({ canUndo: source.history.canUndo, canRedo: source.history.canRedo });
     const unobserve = source.history.observe(syncHistory);
     const onKey = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+        return;
       const action = historyKey(event);
       if (!action) return;
       event.preventDefault();
@@ -157,6 +180,7 @@ export function Board({ boardId }: { boardId: string }) {
         setView,
         scheduleThumbnail,
         setPresence,
+        onEdit,
       );
       surfaceRef.current = surface;
     } catch (failure) {
@@ -174,6 +198,7 @@ export function Board({ boardId }: { boardId: string }) {
       sourceRef.current = undefined;
       setHistory(EMPTY_HISTORY);
       setPresence(NO_PRESENCE);
+      surface?.finishEdit();
       surfaceRef.current = undefined;
       surface?.dispose();
       source
@@ -182,7 +207,7 @@ export function Board({ boardId }: { boardId: string }) {
           setError(`Could not close the board: ${errorMessage(failure)}`),
         );
     };
-  }, [boardId]);
+  }, [boardId, onEdit]);
 
   useEffect(() => {
     const path = boardPath(boardId, name);
@@ -215,6 +240,13 @@ export function Board({ boardId }: { boardId: string }) {
         ref={canvasRef}
         class={SURFACE_CLASS[tool.mode]}
         aria-label={`Drawing board ${boardId}`}
+      />
+      <TextEditor
+        edit={edit}
+        areaRef={editorRef}
+        onInput={editText}
+        onDone={finishEdit}
+        onPan={panBy}
       />
       <Toolbar
         tool={tool}

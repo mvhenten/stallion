@@ -321,6 +321,78 @@
         "text"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "Sticky"
+        },
+        "objectId": {
+          "type": "string",
+          "pattern": "^[0-9A-Za-z_-]{1,64}$"
+        },
+        "nativeZoom": {
+          "type": "integer",
+          "minimum": -40,
+          "maximum": 40
+        },
+        "bbox": {
+          "type": "object",
+          "properties": {
+            "minX": {
+              "type": "number"
+            },
+            "minY": {
+              "type": "number"
+            },
+            "maxX": {
+              "type": "number"
+            },
+            "maxY": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "minX",
+            "minY",
+            "maxX",
+            "maxY"
+          ],
+          "additionalProperties": false
+        },
+        "rgb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        },
+        "background": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 96
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "type",
+        "objectId",
+        "nativeZoom",
+        "bbox",
+        "rgb",
+        "background",
+        "width",
+        "text"
+      ],
+      "additionalProperties": false
     }
   ]
 }

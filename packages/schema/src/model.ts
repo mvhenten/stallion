@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
+import { MAX_STICKY_BYTES } from "./sticky";
 import { DEFAULT_STROKE_STYLE, STROKE_STYLES } from "./style";
 import { MAX_WIDTH, MIN_WIDTH } from "./width";
 
@@ -69,7 +70,18 @@ export const text = z.strictObject({
   text: z.string().min(1).max(4096),
 });
 
-export const stallionObject = z.discriminatedUnion("type", [stroke, shape, text]);
+export const sticky = z.strictObject({
+  type: z.literal("Sticky"),
+  objectId,
+  nativeZoom,
+  bbox,
+  rgb,
+  background: rgb,
+  width,
+  text: z.string().max(MAX_STICKY_BYTES),
+});
+
+export const stallionObject = z.discriminatedUnion("type", [stroke, shape, text, sticky]);
 
 export type Bbox = z.infer<typeof bbox>;
 export type Point = z.infer<typeof point>;
@@ -78,4 +90,5 @@ export type PencilSize = z.infer<typeof pencilSize>;
 export type Stroke = z.infer<typeof stroke>;
 export type Shape = z.infer<typeof shape>;
 export type Text = z.infer<typeof text>;
+export type Sticky = z.infer<typeof sticky>;
 export type StallionObject = z.infer<typeof stallionObject>;

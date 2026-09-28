@@ -5,6 +5,7 @@ import { decode, encode } from "./codec";
 import type { StallionObject } from "./model";
 import { stallionObject } from "./model";
 import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
+import { clampUtf8, utf8Length } from "./sticky";
 import { STROKE_STYLES } from "./style";
 
 const stroke: StallionObject = {
@@ -40,9 +41,21 @@ const shape: StallionObject = {
   fill: "Tint",
 };
 
+const sticky: StallionObject = {
+  type: "Sticky",
+  objectId: "sticky-0001",
+  nativeZoom: 1,
+  bbox: { minX: -40, minY: 8.5, maxX: 160, maxY: 208.5 },
+  rgb: 0x1f2328,
+  background: 0xf76b15,
+  width: 18,
+  text: "Buy milk\nand a very long line that wraps",
+};
+
 const objects: StallionObject[] = [
   stroke,
   shape,
+  sticky,
   {
     type: "Text",
     objectId: "text-0001",
@@ -81,6 +94,23 @@ test.each(SHAPE_KINDS.flatMap((kind) => SHAPE_FILLS.map((fill) => ({ kind, fill 
 
 test("matches the golden shape fixture", async () => {
   await expect(hex(encode(shape))).toMatchFileSnapshot("../fixtures/shape.cbor.hex");
+});
+
+test("matches the golden sticky fixture", async () => {
+  await expect(hex(encode(sticky))).toMatchFileSnapshot("../fixtures/sticky.cbor.hex");
+});
+
+test("round-trips an empty sticky", () => {
+  const empty: StallionObject = { ...sticky, text: "" };
+  expect(decode(encode(empty))).toEqual({ ok: true, value: empty });
+});
+
+test("clamps sticky text to 4096 UTF-8 bytes without splitting a character", () => {
+  const long = "é".repeat(2049);
+  expect(utf8Length(long)).toBe(4098);
+  const kept = clampUtf8(long);
+  expect(utf8Length(kept)).toBe(4096);
+  expect(kept).toBe("é".repeat(2048));
 });
 
 test("matches the golden stroke fixture", async () => {
@@ -126,6 +156,11 @@ test.each([
   ["a shape without an end", { ...shape, end: undefined }],
   ["a shape point with three coordinates", { ...shape, start: [1, 2, 3] }],
   ["a shape width above 96", { ...shape, width: 97 }],
+  ["a sticky without a background", { ...sticky, background: undefined }],
+  ["a sticky background above 0xFFFFFF", { ...sticky, background: 0x1000000 }],
+  ["a sticky font below 0.5", { ...sticky, width: 0.25 }],
+  ["a sticky with a colour index", { ...sticky, colour: 0 }],
+  ["a sticky with text over 4096", { ...sticky, text: "x".repeat(4097) }],
 ])("rejects %s", (_, invalid) => {
   expect(stallionObject.safeParse(invalid).success).toBe(false);
   expect(decode(raw.encode(invalid))).toMatchObject({ ok: false });

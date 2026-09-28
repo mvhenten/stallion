@@ -8,7 +8,7 @@ import {
   segmentDistance,
   type Tile,
 } from "@stallion/geometry";
-import { FILLABLE, type Shape, type Stroke, widthOf } from "@stallion/schema";
+import { FILLABLE, type Shape, type Sticky, type Stroke, widthOf } from "@stallion/schema";
 import { shapeWorldPoints } from "./shape";
 import { strokeWorldWidth } from "./stroke";
 
@@ -77,3 +77,6 @@ export const hitsShape = (tile: Tile, shape: Shape, world: Point, zoom: number):
       segmentDistance(ORIGIN, corner, corners[(index + 1) % corners.length] ?? corner) <= reachPx,
   );
 };
+
+export const hitsSticky = (sticky: Sticky, world: Point, zoom: number): boolean =>
+  contains(grow(sticky.bbox, ERASER_TOLERANCE_PX / zoom), pointBox(world));

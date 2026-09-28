@@ -10,6 +10,7 @@ export type DecodeResult = { ok: true; value: StallionObject } | { ok: false; er
 const cbor = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSize: true });
 
 const normalise = (object: StallionObject): StallionObject => {
+  if (object.type === "Sticky") return object;
   const complete = withWidth(withRgb(object));
   return complete.type === "Text" ? complete : withStyle(complete);
 };

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_POINTS: usize = 4096;
 pub const MAX_TEXT: usize = 4096;
+pub const MAX_STICKY_BYTES: usize = 4096;
 pub const MAX_OBJECT_ID: usize = 64;
 pub const ZOOM_RANGE: std::ops::RangeInclusive<i32> = -40..=40;
 pub const MAX_COLOUR: u8 = 5;
@@ -108,18 +109,31 @@ pub struct Text {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Sticky {
+    pub object_id: String,
+    pub native_zoom: i32,
+    pub bbox: Bbox,
+    pub rgb: u32,
+    pub background: u32,
+    pub width: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum StallionObject {
     Stroke(Stroke),
     Shape(Shape),
     Text(Text),
+    Sticky(Sticky),
 }
 
 struct Common<'a> {
     object_id: &'a str,
     native_zoom: i32,
     bbox: &'a Bbox,
-    colour: u8,
+    colour: Option<u8>,
     rgb: Option<u32>,
     width: Option<f64>,
 }
@@ -139,7 +153,7 @@ impl StallionObject {
                 object_id: &o.object_id,
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
-                colour: o.colour,
+                colour: Some(o.colour),
                 rgb: o.rgb,
                 width: o.width,
             },
@@ -147,7 +161,7 @@ impl StallionObject {
                 object_id: &o.object_id,
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
-                colour: o.colour,
+                colour: Some(o.colour),
                 rgb: o.rgb,
                 width: o.width,
             },
@@ -155,9 +169,17 @@ impl StallionObject {
                 object_id: &o.object_id,
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
-                colour: o.colour,
+                colour: Some(o.colour),
                 rgb: o.rgb,
                 width: o.width,
+            },
+            StallionObject::Sticky(o) => Common {
+                object_id: &o.object_id,
+                native_zoom: o.native_zoom,
+                bbox: &o.bbox,
+                colour: None,
+                rgb: Some(o.rgb),
+                width: Some(o.width),
             },
         }
     }
@@ -179,8 +201,8 @@ impl StallionObject {
                 common.native_zoom
             ));
         }
-        if common.colour > MAX_COLOUR {
-            return Err(format!("colour {} is outside 0..5", common.colour));
+        if let Some(colour) = common.colour.filter(|&colour| colour > MAX_COLOUR) {
+            return Err(format!("colour {colour} is outside 0..5"));
         }
         if let Some(rgb) = common.rgb.filter(|&rgb| rgb > MAX_RGB) {
             return Err(format!("rgb {rgb:#x} is outside 0..0xFFFFFF"));
@@ -210,6 +232,21 @@ impl StallionObject {
                 let len = t.text.encode_utf16().count();
                 if len == 0 || len > MAX_TEXT {
                     return Err(format!("text length {len} is outside 1..{MAX_TEXT}"));
+                }
+                Ok(())
+            }
+            StallionObject::Sticky(s) => {
+                if s.background > MAX_RGB {
+                    return Err(format!(
+                        "background {:#x} is outside 0..0xFFFFFF",
+                        s.background
+                    ));
+                }
+                if s.text.len() > MAX_STICKY_BYTES {
+                    return Err(format!(
+                        "sticky text of {} bytes is over {MAX_STICKY_BYTES}",
+                        s.text.len()
+                    ));
                 }
                 Ok(())
             }
@@ -255,6 +292,12 @@ pub(crate) mod tests {
     fn shape_fixture() -> Vec<u8> {
         from_hex(include_str!(
             "../../../packages/schema/fixtures/shape.cbor.hex"
+        ))
+    }
+
+    fn sticky_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/sticky.cbor.hex"
         ))
     }
 
@@ -422,6 +465,77 @@ pub(crate) mod tests {
         let at = unknown.windows(5).position(|w| w == b"Arrow").unwrap();
         unknown[at..at + 5].copy_from_slice(b"Arrox");
         assert!(decode(&unknown).is_err());
+    }
+
+    fn golden_sticky() -> Sticky {
+        Sticky {
+            object_id: "sticky-0001".into(),
+            native_zoom: 1,
+            bbox: Bbox {
+                min_x: -40.0,
+                min_y: 8.5,
+                max_x: 160.0,
+                max_y: 208.5,
+            },
+            rgb: 0x1F_2328,
+            background: 0xF7_6B15,
+            width: 18.0,
+            text: "Buy milk\nand a very long line that wraps".into(),
+        }
+    }
+
+    #[test]
+    fn decodes_the_golden_sticky_fixture() {
+        assert_eq!(
+            decode(&sticky_fixture()),
+            Ok(StallionObject::Sticky(golden_sticky()))
+        );
+    }
+
+    #[test]
+    fn accepts_an_empty_sticky_and_one_at_the_byte_limit() {
+        for text in [String::new(), "é".repeat(MAX_STICKY_BYTES / 2)] {
+            let sticky = StallionObject::Sticky(Sticky {
+                text,
+                ..golden_sticky()
+            });
+            assert_eq!(decode(&encode(sticky.clone())), Ok(sticky));
+        }
+    }
+
+    #[test]
+    fn rejects_sticky_text_over_4096_bytes() {
+        let over = Sticky {
+            text: "é".repeat(MAX_STICKY_BYTES / 2) + "x",
+            ..golden_sticky()
+        };
+        assert!(
+            decode(&encode(StallionObject::Sticky(over)))
+                .unwrap_err()
+                .contains("4096")
+        );
+    }
+
+    #[test]
+    fn rejects_a_sticky_with_a_bad_background_or_font() {
+        let background = Sticky {
+            background: MAX_RGB + 1,
+            ..golden_sticky()
+        };
+        assert!(
+            decode(&encode(StallionObject::Sticky(background)))
+                .unwrap_err()
+                .contains("background")
+        );
+        let font = Sticky {
+            width: 0.25,
+            ..golden_sticky()
+        };
+        assert!(
+            decode(&encode(StallionObject::Sticky(font)))
+                .unwrap_err()
+                .contains("width")
+        );
     }
 
     #[test]
