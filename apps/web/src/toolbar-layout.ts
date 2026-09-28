@@ -1,8 +1,12 @@
+import { DEFAULT_STROKE_STYLE, STROKE_STYLES, type StrokeStyle } from "@stallion/schema";
+
 export const WIDE_QUERY = "(min-width: 960px)";
 
 export const EXPANDED_KEY = "stallion:toolbar-expanded";
 
 export const MODE_KEY = "stallion:toolbar-mode";
+
+export const STYLE_KEY = "stallion:stroke-style";
 
 export const RECENT_COLOURS_KEY = "stallion:recent-colours";
 
@@ -13,6 +17,7 @@ export type ToolbarMode = "Quick" | "Palette";
 export type Control =
   | "Sizes"
   | "Width"
+  | "Styles"
   | "Colours"
   | "CustomColour"
   | "RecentColours"
@@ -68,6 +73,7 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Flip", "Connection"],
   ["Sizes"],
   ["Width"],
+  ["Styles"],
   ["Colours"],
   ["CustomColour", "RecentColours"],
   ["Swap", "Pan", "Select", "Eraser"],
@@ -124,6 +130,26 @@ export const loadMode = (store: () => Store): ToolbarMode => {
 export const saveMode = (store: () => Store, mode: ToolbarMode): void => {
   try {
     store().setItem(MODE_KEY, mode);
+  } catch {
+    return;
+  }
+};
+
+const isStrokeStyle = (value: unknown): value is StrokeStyle =>
+  STROKE_STYLES.some((style) => style === value);
+
+export const loadStyle = (store: () => Store): StrokeStyle => {
+  try {
+    const stored = store().getItem(STYLE_KEY);
+    return isStrokeStyle(stored) ? stored : DEFAULT_STROKE_STYLE;
+  } catch {
+    return DEFAULT_STROKE_STYLE;
+  }
+};
+
+export const saveStyle = (store: () => Store, style: StrokeStyle): void => {
+  try {
+    store().setItem(STYLE_KEY, style);
   } catch {
     return;
   }

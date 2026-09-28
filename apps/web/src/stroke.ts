@@ -19,6 +19,8 @@ import {
   rgbHex,
   type Stroke,
   type Point as StrokePoint,
+  type StrokeStyle,
+  styleOf,
   widthOf,
 } from "@stallion/schema";
 import getStroke, { type StrokeOptions } from "perfect-freehand";
@@ -59,6 +61,10 @@ const strokeOptions = (size: number, last: boolean): StrokeOptions => ({
   last,
 });
 
+export const HIGHLIGHTER_ALPHA = 0.4;
+
+export const UNIFORM_PRESSURE = 0.5;
+
 export const outlinePath = (
   points: readonly StrokePoint[],
   size: number,
@@ -74,6 +80,57 @@ export const outlinePath = (
   return path;
 };
 
+const centrelinePath = (points: readonly StrokePoint[]): Path2D => {
+  const path = new Path2D();
+  const [first, ...rest] = points;
+  if (!first) return path;
+  path.moveTo(first[0], first[1]);
+  if (rest.length === 0) path.lineTo(first[0], first[1]);
+  for (const [x, y] of rest) path.lineTo(x, y);
+  return path;
+};
+
+export type StrokeInk = { style: StrokeStyle; path: Path2D; lineWidth: number };
+
+export const strokeInk = (
+  style: StrokeStyle,
+  points: readonly StrokePoint[],
+  size: number,
+  last: boolean,
+): StrokeInk => {
+  if (style === "Dashed") return { style, path: centrelinePath(points), lineWidth: size };
+  const pressed =
+    style === "Uniform" ? points.map(([x, y]): StrokePoint => [x, y, UNIFORM_PRESSURE]) : points;
+  return { style, path: outlinePath(pressed, size, last), lineWidth: size };
+};
+
+export const dashPattern = (lineWidth: number): number[] => [lineWidth, lineWidth * 2.5];
+
+export const paintInk = (
+  ctx: CanvasRenderingContext2D,
+  ink: StrokeInk,
+  colour: string,
+  alpha = 1,
+): void => {
+  const highlighter = ink.style === "Highlighter";
+  ctx.globalAlpha = highlighter ? alpha * HIGHLIGHTER_ALPHA : alpha;
+  if (highlighter) ctx.globalCompositeOperation = "multiply";
+  if (ink.style === "Dashed") {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = ink.lineWidth;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.setLineDash(dashPattern(ink.lineWidth));
+    ctx.stroke(ink.path);
+    ctx.setLineDash([]);
+  } else {
+    ctx.fillStyle = colour;
+    ctx.fill(ink.path);
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+};
+
 const randomHex = (bytes: number): string =>
   Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (byte) =>
     byte.toString(16).padStart(2, "0"),
@@ -85,14 +142,21 @@ export type Draft = {
   objectId: string;
   rgb: number;
   width: number;
+  style: StrokeStyle;
   nativeZoom: number;
   points: StrokePoint[];
 };
 
-export const startDraft = (rgb: number, width: number, zoom: number): Draft => ({
+export const startDraft = (
+  rgb: number,
+  width: number,
+  style: StrokeStyle,
+  zoom: number,
+): Draft => ({
   objectId: newObjectId(),
   rgb,
   width,
+  style,
   nativeZoom: nativeLevel(zoom),
   points: [],
 });
@@ -129,6 +193,7 @@ export const finishDraft = (draft: Draft): StoredObject | undefined => {
     rgb: draft.rgb,
     size: nearestSize(draft.width),
     width: draft.width,
+    style: draft.style,
     points: draft.points.map(([x, y, pressure]) => {
       const local = toTileLocal(tile, { x, y });
       return [local.x, local.y, pressure];
@@ -156,19 +221,21 @@ export const strokeFrame = (tile: Tile, stroke: Stroke): StrokeFrame => {
   return { origin, scale, points };
 };
 
-export const strokeFramePath = (stroke: Stroke, frame: StrokeFrame): Path2D =>
-  outlinePath(
+export const strokeFrameInk = (stroke: Stroke, frame: StrokeFrame): StrokeInk =>
+  strokeInk(
+    styleOf(stroke),
     frame.points,
     strokeWorldWidth(widthOf(stroke), stroke.nativeZoom) / frame.scale,
     true,
   );
 
-export const draftScreenPath = (
-  draft: Pick<Draft, "width" | "nativeZoom" | "points">,
+export const draftScreenInk = (
+  draft: Pick<Draft, "width" | "style" | "nativeZoom" | "points">,
   toScreen: (world: Point) => Point,
   zoom: number,
-): Path2D =>
-  outlinePath(
+): StrokeInk =>
+  strokeInk(
+    draft.style,
     draft.points.map(([x, y, pressure]) => {
       const screen = toScreen({ x, y });
       return [screen.x, screen.y, pressure];

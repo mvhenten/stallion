@@ -29,7 +29,7 @@ describe("width", () => {
   });
 
   test("commits the draft width and the nearest size, and scales the world width by it", () => {
-    const draft = startDraft(0, 60, 1);
+    const draft = startDraft(0, 60, "Pen", 1);
     draft.points.push([10, 10, 0.5], [40, 20, 0.5]);
     const stroke = finishDraft(draft)?.object as Stroke;
     expect(stroke).toMatchObject({ width: 60, size: "Large" });
@@ -48,9 +48,15 @@ describe("width", () => {
 describe("finishDraft", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  test("commits the draft style", () => {
+    const draft = startDraft(0, 8, "Dashed", 1);
+    draft.points.push([10, 10, 0.5], [40, 20, 0.5]);
+    expect(finishDraft(draft)?.object).toMatchObject({ style: "Dashed" });
+  });
+
   test("commits a stroke outside a secure context, where crypto.randomUUID is missing", () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
-    const draft = startDraft(0, 8, 1);
+    const draft = startDraft(0, 8, "Pen", 1);
     draft.points.push([10, 10, 0.5], [40, 20, 0.5]);
     const stored = finishDraft(draft);
     expect(stored?.object.objectId).toMatch(/^[0-9a-z]{9}[0-9a-f]{12}$/);
@@ -60,7 +66,7 @@ describe("finishDraft", () => {
 describe("strokeFrame", () => {
   test("keeps a stroke across the world origin drawable in float32 canvas paths", () => {
     const zoom = 1 / 9;
-    const draft = startDraft(0, 8, zoom);
+    const draft = startDraft(0, 8, "Pen", zoom);
     const circle = Array.from({ length: 25 }, (_, i) => {
       const angle = (i / 24) * 2 * Math.PI;
       return { x: 600 + (300 * Math.cos(angle)) / zoom, y: 960 + (300 * Math.sin(angle)) / zoom };
@@ -81,7 +87,7 @@ describe("strokeFrame", () => {
 
 describe("translateStroke", () => {
   test("re-places a stroke dragged across a tile boundary and keeps its world points", () => {
-    const draft = startDraft(0, 3, 1);
+    const draft = startDraft(0, 3, "Pen", 1);
     draft.points.push([10, 10, 0.5], [40, 20, 0.5]);
     const stored = finishDraft(draft);
     if (stored?.object.type !== "Stroke") throw new Error("no stroke");

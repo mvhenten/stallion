@@ -14,6 +14,7 @@ import { createSurface, type Surface, type SurfaceView, type Tool, type ToolMode
 import { type BoardSource, type Connection, openSource, syncUrlFor } from "./sync";
 import { captureThumbnail } from "./thumbnail";
 import { type HistoryState, Toolbar } from "./toolbar";
+import { loadStyle } from "./toolbar-layout";
 
 const EMPTY_HISTORY: HistoryState = { canUndo: false, canRedo: false };
 
@@ -52,6 +53,7 @@ export function Board({ boardId }: { boardId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>({
     width: PENCIL_PX.Medium,
+    style: loadStyle(() => localStorage),
     primary: PALETTE_RGB[0],
     secondary: PALETTE_RGB[4],
     mode: "Pencil",

@@ -42,6 +42,7 @@ const stroke = (objectId: string, bbox: BBox = { minX: 10, minY: 10, maxX: 200, 
     colour: 0,
     rgb: 0x1f2328,
     size: "Small",
+    style: "Pen",
     points: [[1, 1, 0.5]],
   };
   return { tile: placed.tile, object };

@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 import { decode, encode } from "./codec";
 import type { StallionObject } from "./model";
 import { stallionObject } from "./model";
+import { STROKE_STYLES } from "./style";
 
 const stroke: StallionObject = {
   type: "Stroke",
@@ -14,6 +15,7 @@ const stroke: StallionObject = {
   rgb: 0x123456,
   size: "Medium",
   width: 12.5,
+  style: "Highlighter",
   points: [
     [10, 12.5, 0.5],
     [26, 20, 0.75],
@@ -57,6 +59,11 @@ test.each(objects)("round-trips a $type", (object) => {
   expect(decode(encode(object))).toEqual({ ok: true, value: object });
 });
 
+test.each(STROKE_STYLES)("round-trips a %s stroke", (style) => {
+  const styled: StallionObject = { ...stroke, style };
+  expect(decode(encode(styled))).toEqual({ ok: true, value: styled });
+});
+
 test("matches the golden stroke fixture", async () => {
   await expect(hex(encode(stroke))).toMatchFileSnapshot("../fixtures/stroke.cbor.hex");
 });
@@ -66,15 +73,20 @@ const legacyBytes = (): Uint8Array => {
   return Uint8Array.from(text.trim().match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
 };
 
-test("decodes a legacy stroke without rgb or width and derives both", () => {
+test("decodes a legacy stroke without rgb, width or style as a Pen and derives each", () => {
   const decoded = decode(legacyBytes());
-  expect(decoded).toMatchObject({ ok: true, value: { colour: 2, rgb: 0xf76b15, width: 8 } });
+  expect(decoded).toMatchObject({
+    ok: true,
+    value: { colour: 2, rgb: 0xf76b15, width: 8, style: "Pen" },
+  });
   const legacy = raw.decode(legacyBytes()) as Record<string, unknown>;
   expect(legacy.rgb).toBeUndefined();
   expect(legacy.width).toBeUndefined();
+  expect(legacy.style).toBeUndefined();
   expect(raw.decode(encode(legacy as unknown as StallionObject))).toMatchObject({
     rgb: 0xf76b15,
     width: 8,
+    style: "Pen",
   });
 });
 
@@ -85,6 +97,7 @@ test.each([
   ["a width above 96", { ...stroke, width: 96.5 }],
   ["an infinite width", { ...stroke, width: Number.POSITIVE_INFINITY }],
   ["a NaN width", { ...stroke, width: Number.NaN }],
+  ["an unknown style", { ...stroke, style: "Marker" }],
   ["a colour outside the palette", { ...stroke, colour: 6 }],
   ["a pressure above one", { ...stroke, points: [[0, 0, 1.5]] }],
   ["a zoom level beyond 40", { ...stroke, nativeZoom: 41 }],

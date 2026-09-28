@@ -11,7 +11,14 @@ import {
   type Tile,
   tileBounds,
 } from "@stallion/geometry";
-import { nearestColour, nearestSize, rgbHex, rgbOf, type Stroke } from "@stallion/schema";
+import {
+  nearestColour,
+  nearestSize,
+  rgbHex,
+  rgbOf,
+  type Stroke,
+  type StrokeStyle,
+} from "@stallion/schema";
 import { Gesture } from "@use-gesture/vanilla";
 import {
   type Camera,
@@ -41,22 +48,30 @@ import {
 import {
   continueDraft,
   type Draft,
-  draftScreenPath,
+  draftScreenInk,
   finishDraft,
   MAX_POINTS,
+  paintInk,
   type StrokeFrame,
+  type StrokeInk,
   startDraft,
   strokeFrame,
-  strokeFramePath,
+  strokeFrameInk,
   translateStroke,
 } from "./stroke";
 import type { DrawingSource } from "./sync";
 
 export type ToolMode = "Pencil" | "Pan" | "Eraser" | "Select";
 
-export type Tool = { width: number; primary: number; secondary: number; mode: ToolMode };
+export type Tool = {
+  width: number;
+  style: StrokeStyle;
+  primary: number;
+  secondary: number;
+  mode: ToolMode;
+};
 
-type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; path: Path2D };
+type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; ink: StrokeInk };
 
 type Drag = { objectId: string; from: Point; dx: number; dy: number };
 
@@ -214,8 +229,7 @@ export function createSurface(
         (origin.x + offset.dx - camera.x) * camera.zoom * dpr,
         (origin.y + offset.dy - camera.y) * camera.zoom * dpr,
       );
-      ctx.fillStyle = rgbHex(rgbOf(entry.stroke));
-      ctx.fill(entry.path);
+      paintInk(ctx, entry.ink, rgbHex(rgbOf(entry.stroke)));
     }
     renderMarkers(
       source.hints.current.map((hint) => ({
@@ -227,8 +241,11 @@ export function createSurface(
     if (inks.length > 0) renderInks(dpr);
     if (draft && draft.points.length > 0) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = rgbHex(draft.rgb);
-      ctx.fill(draftScreenPath(draft, (world) => worldToScreen(camera, world), camera.zoom));
+      paintInk(
+        ctx,
+        draftScreenInk(draft, (world) => worldToScreen(camera, world), camera.zoom),
+        rgbHex(draft.rgb),
+      );
     }
     renderSelection(dpr);
     if (cursors.length > 0) renderCursors(dpr);
@@ -246,13 +263,15 @@ export function createSurface(
 
   const renderInks = (dpr: number) => {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.globalAlpha = INK_ALPHA;
     for (const ink of inks) {
       if (ink.points.length === 0) continue;
-      ctx.fillStyle = rgbHex(ink.rgb);
-      ctx.fill(draftScreenPath(ink, (world) => worldToScreen(camera, world), camera.zoom));
+      paintInk(
+        ctx,
+        draftScreenInk(ink, (world) => worldToScreen(camera, world), camera.zoom),
+        rgbHex(ink.rgb),
+        INK_ALPHA,
+      );
     }
-    ctx.globalAlpha = 1;
   };
 
   const renderSelection = (dpr: number) => {
@@ -305,7 +324,7 @@ export function createSurface(
   const add = ({ tile, object }: StoredObject) => {
     if (object.type !== "Stroke") return;
     const frame = strokeFrame(tile, object);
-    const entry = { tile, stroke: object, frame, path: strokeFramePath(object, frame) };
+    const entry = { tile, stroke: object, frame, ink: strokeFrameInk(object, frame) };
     const previous = entries.get(object.objectId);
     entries.set(object.objectId, entry);
     const rest = previous ? ordered.filter((other) => other !== previous) : ordered;
@@ -506,13 +525,14 @@ export function createSurface(
   };
 
   const shareDraft = (next: Draft) => {
-    const { objectId, rgb, width, nativeZoom, points } = next;
+    const { objectId, rgb, width, style, nativeZoom, points } = next;
     publisher?.start({
       strokeId: objectId,
       colour: nearestColour(rgb),
       rgb,
       size: nearestSize(width),
       width,
+      style,
       nativeZoom,
     });
     publisher?.extend(points);
@@ -584,6 +604,7 @@ export function createSurface(
           draft = startDraft(
             effect.secondary ? tool.secondary : tool.primary,
             tool.width,
+            tool.style,
             camera.zoom,
           );
           shareDraft(draft);

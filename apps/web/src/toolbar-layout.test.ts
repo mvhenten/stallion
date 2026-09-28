@@ -3,11 +3,14 @@ import {
   expandedAfterPick,
   loadMode,
   loadRecentColours,
+  loadStyle,
   MODE_KEY,
   placePopover,
   RECENT_COLOURS_KEY,
+  STYLE_KEY,
   saveMode,
   saveRecentColours,
+  saveStyle,
   toolbarLayout,
   toolbarRows,
   withRecentColour,
@@ -57,6 +60,7 @@ test("the palette holds every tool and the flip back, on any screen, without a t
           "Flip",
           "Sizes",
           "Width",
+          "Styles",
           "Colours",
           "CustomColour",
           "RecentColours",
@@ -91,6 +95,18 @@ test("the toolbar mode round-trips through storage and defaults to the quick bar
 test("blocked storage falls back to the quick bar and saving does not throw", () => {
   expect(loadMode(broken)).toBe("Quick");
   expect(() => saveMode(broken, "Palette")).not.toThrow();
+});
+
+test("the stroke style round-trips through storage and defaults to Pen", () => {
+  const store = memoryStore();
+  expect(loadStyle(() => store)).toBe("Pen");
+  saveStyle(() => store, "Highlighter");
+  expect(store.getItem(STYLE_KEY)).toBe("Highlighter");
+  expect(loadStyle(() => store)).toBe("Highlighter");
+  store.setItem(STYLE_KEY, "Marker");
+  expect(loadStyle(() => store)).toBe("Pen");
+  expect(loadStyle(broken)).toBe("Pen");
+  expect(() => saveStyle(broken, "Dashed")).not.toThrow();
 });
 
 test("picking a colour collapses the bar on a narrow screen and not on a wide one", () => {

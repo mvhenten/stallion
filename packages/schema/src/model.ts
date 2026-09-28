@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_STROKE_STYLE, STROKE_STYLES } from "./style";
 import { MAX_WIDTH, MIN_WIDTH } from "./width";
 
 export const objectId = z.string().regex(/^[0-9A-Za-z_-]{1,64}$/);
@@ -18,6 +19,8 @@ export const rgb = z.int().min(0).max(0xffffff);
 
 export const width = z.number().min(MIN_WIDTH).max(MAX_WIDTH);
 
+export const strokeStyle = z.enum(STROKE_STYLES).default(DEFAULT_STROKE_STYLE);
+
 export const pencilSize = z.enum(["Small", "Medium", "Large"]);
 
 export const point = z.tuple([z.number(), z.number(), z.number().min(0).max(1)]);
@@ -31,6 +34,7 @@ export const stroke = z.strictObject({
   rgb: rgb.optional(),
   size: pencilSize,
   width: width.optional(),
+  style: strokeStyle,
   points: z.array(point).min(1).max(4096),
 });
 

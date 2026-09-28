@@ -12,6 +12,7 @@ const stroke: Stroke = {
   colour: 0,
   rgb: 0x1f2328,
   size: "Small",
+  style: "Pen",
   points: [
     [10, 10, 0.5],
     [110, 10, 0.5],

@@ -1,4 +1,11 @@
-import { PALETTE_RGB, PENCIL_PX, parseRgbHex, rgbHex } from "@stallion/schema";
+import {
+  PALETTE_RGB,
+  PENCIL_PX,
+  parseRgbHex,
+  rgbHex,
+  STROKE_STYLES,
+  type StrokeStyle,
+} from "@stallion/schema";
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { LevelChip } from "./level-chip";
@@ -22,6 +29,7 @@ import {
   saveExpanded,
   saveMode,
   saveRecentColours,
+  saveStyle,
   type ToolbarMode,
   toolbarLayout,
   toolbarRows,
@@ -30,6 +38,33 @@ import {
 } from "./toolbar-layout";
 
 const DOT_PX = { Small: 4, Medium: 9, Large: 16 } as const;
+
+const STYLE_TITLE: Record<StrokeStyle, string> = {
+  Pen: "Pen: pressure-sensitive ink",
+  Highlighter: "Highlighter: translucent ink that darkens what it crosses",
+  Dashed: "Dashed: an even dashed line",
+  Uniform: "Uniform: ink of even width",
+};
+
+const STYLE_WAVE = "M3 16c3-6 6-6 9-2s6 4 9-2";
+
+const STYLE_STROKE: Record<Exclude<StrokeStyle, "Pen">, JSX.SVGAttributes<SVGPathElement>> = {
+  Highlighter: { "stroke-width": "6", "stroke-opacity": "0.45" },
+  Dashed: { "stroke-width": "2", "stroke-linecap": "round", "stroke-dasharray": "2 4" },
+  Uniform: { "stroke-width": "2.5", "stroke-linecap": "round" },
+};
+
+function StyleIcon({ style }: { style: StrokeStyle }) {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      {style === "Pen" ? (
+        <path d="M3 16.5c3-7 6-7 9-2.5s6 3.5 9-2.5c-2 7-6 8-9 4s-6-5-9 1z" fill="currentColor" />
+      ) : (
+        <path d={STYLE_WAVE} fill="none" stroke="currentColor" {...STYLE_STROKE[style]} />
+      )}
+    </svg>
+  );
+}
 
 export type HistoryState = { canUndo: boolean; canRedo: boolean };
 
@@ -161,6 +196,10 @@ export function Toolbar({
     saveRecentColours(storage, next);
     pick({ ...tool, [slot]: rgb, mode: "Pencil" });
   };
+  const pickStyle = (style: StrokeStyle) => {
+    saveStyle(storage, style);
+    pick({ ...tool, style, mode: "Pencil" });
+  };
   const toggleMode = (mode: Tool["mode"]) =>
     pick({ ...tool, mode: tool.mode === mode ? "Pencil" : mode });
 
@@ -215,6 +254,24 @@ export function Toolbar({
         <output class="width-value" aria-live="polite">
           {tool.width} px
         </output>
+      </fieldset>
+    ),
+    Styles: () => (
+      <fieldset key="Styles" class="group" aria-label="Stroke style">
+        {STROKE_STYLES.map((style) => (
+          <button
+            key={style}
+            type="button"
+            aria-pressed={tool.mode === "Pencil" && tool.style === style}
+            aria-label={`${style} style`}
+            title={STYLE_TITLE[style]}
+            class="tool"
+            data-stroke-style={style}
+            onClick={() => pickStyle(style)}
+          >
+            <StyleIcon style={style} />
+          </button>
+        ))}
       </fieldset>
     ),
     Colours: () => (
@@ -297,7 +354,7 @@ export function Toolbar({
         type="button"
         class="tool"
         aria-pressed={tool.mode === "Pencil"}
-        aria-label={`Pencil, ${tool.width} px`}
+        aria-label={`${tool.style} pencil, ${tool.width} px`}
         title="Draw"
         onClick={() => pick({ ...tool, mode: "Pencil" })}
       >

@@ -505,6 +505,131 @@ const smokeWidth = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
+const meanRgb = (analyser, png) =>
+  analyser.evaluate(async (b64) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0);
+    const data = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    const sum = [0, 0, 0];
+    for (let i = 0; i < data.length; i += 4) {
+      sum[0] += data[i];
+      sum[1] += data[i + 1];
+      sum[2] += data[i + 2];
+    }
+    const count = data.length / 4;
+    return sum.map((channel) => Math.round(channel / count));
+  }, png.toString("base64"));
+
+const SAMPLE_PX = 4;
+const PAPER_RGB = [0xfb, 0xfa, 0xf7];
+const brightness = ([r, g, b]) => r + g + b;
+
+const linePath = (from, to) =>
+  Array.from({ length: 24 }, (_, i) => {
+    const t = i / 23;
+    return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+  });
+
+const siblingBoard = (url) => {
+  const parsed = new URL(url);
+  parsed.pathname = `/b/${randomBoardId()}`;
+  return parsed.toString();
+};
+
+const smokeHighlighter = async ({ browser, devices, analyser, url, dir }) => {
+  const context = await browser.newContext({
+    ...devices[DEVICE],
+    colorScheme: "light",
+  });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`highlighter: ${problems[0]}`);
+  };
+  const shot = async (name) => {
+    const path = join(dir, `highlighter-${name}.png`);
+    writeFileSync(path, await page.screenshot());
+    return path;
+  };
+  const sample = async (point) =>
+    meanRgb(
+      analyser,
+      await page.screenshot({
+        scale: "css",
+        clip: {
+          x: point.x - SAMPLE_PX / 2,
+          y: point.y - SAMPLE_PX / 2,
+          width: SAMPLE_PX,
+          height: SAMPLE_PX,
+        },
+      }),
+    );
+  const measure = async (spots, stage) => {
+    const pen = await sample(spots.pen);
+    const highlighter = await sample(spots.highlighter);
+    const overlap = await sample(spots.overlap);
+    const paper = brightness(PAPER_RGB);
+    if (brightness(pen) > paper - 60) fail(`highlighter: the pen stroke did not show ${stage}`);
+    if (brightness(highlighter) > paper - 30) {
+      fail(`highlighter: the highlighter stroke did not show ${stage}`);
+    }
+    if (!(brightness(overlap) < brightness(pen) - 6)) {
+      fail(`highlighter: overlap ${overlap} is not darker than the pen alone ${pen} ${stage}`);
+    }
+    if (!(brightness(overlap) < brightness(highlighter) - 6)) {
+      fail(
+        `highlighter: overlap ${overlap} is not darker than the highlighter alone ${highlighter} ${stage}`,
+      );
+    }
+    return { pen, highlighter, overlap };
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail("highlighter: no palette bounding box");
+    const left = box.x + box.width + CLIP_PAD;
+    const cx = Math.round(left + (viewport.width - left) / 2);
+    const cy = Math.round(viewport.height * 0.5);
+    const spots = {
+      pen: { x: cx - 90, y: cy },
+      highlighter: { x: cx, y: cy + 80 },
+      overlap: { x: cx, y: cy },
+    };
+    await palette.getByRole("button", { name: "Pen style" }).tap();
+    await palette.getByRole("button", { name: "Colour 5" }).tap();
+    await palette.getByRole("button", { name: "40 px pencil" }).tap();
+    await drawWithTouch(page, linePath({ x: cx - 150, y: cy }, { x: cx + 150, y: cy }));
+    await page.waitForTimeout(500);
+    await palette.getByRole("button", { name: "Highlighter style" }).tap();
+    await palette.getByRole("button", { name: "Colour 3" }).tap();
+    await drawWithTouch(page, linePath({ x: cx, y: cy - 150 }, { x: cx, y: cy + 150 }));
+    await page.waitForTimeout(1300);
+    const drawn = await measure(spots, "after drawing");
+    const drawnFull = await shot("drawn");
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const reloaded = await measure(spots, "after reload");
+    const reloadedFull = await shot("reloaded");
+    check();
+    return { drawn, reloaded, screenshots: [drawnFull, reloadedFull] };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -537,6 +662,19 @@ const main = async () => {
       `PASS width: 1 px and 60 px ink ${width.drawn.join(" < ")} drawn, ${width.reloaded.join(" < ")} after reload`,
     );
     for (const path of width.screenshots) console.log(`  ${path}`);
+    const highlighter = await smokeHighlighter({
+      browser,
+      devices,
+      analyser,
+      url: siblingBoard(options.url),
+      dir,
+    });
+    const rgbText = ({ pen, highlighter: alone, overlap }) =>
+      `overlap ${overlap.join(",")} darker than pen ${pen.join(",")} and highlighter ${alone.join(",")}`;
+    console.log(
+      `PASS highlighter: ${rgbText(highlighter.drawn)} drawn, ${rgbText(highlighter.reloaded)} after reload`,
+    );
+    for (const path of highlighter.screenshots) console.log(`  ${path}`);
   } finally {
     await browser.close();
   }

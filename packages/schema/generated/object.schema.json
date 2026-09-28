@@ -64,6 +64,16 @@
           "minimum": 0.5,
           "maximum": 96
         },
+        "style": {
+          "default": "Pen",
+          "type": "string",
+          "enum": [
+            "Pen",
+            "Highlighter",
+            "Dashed",
+            "Uniform"
+          ]
+        },
         "points": {
           "minItems": 1,
           "maxItems": 4096,

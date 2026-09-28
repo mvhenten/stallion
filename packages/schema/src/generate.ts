@@ -4,7 +4,7 @@ import { z } from "zod";
 import { stallionObject } from "./model";
 
 export const jsonSchema = (): Record<string, unknown> =>
-  z.toJSONSchema(stallionObject, { target: "draft-07" });
+  z.toJSONSchema(stallionObject, { target: "draft-07", io: "input" });
 
 export const validatorSource = (): string => {
   const ajv = new Ajv({ code: { source: true, esm: true }, unicode: false });

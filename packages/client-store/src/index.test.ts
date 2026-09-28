@@ -13,6 +13,7 @@ const stroke = (objectId: string): Stroke => ({
   colour: 0,
   rgb: 0x1f2328,
   size: "Medium",
+  style: "Pen",
   points: [[1, 1, 0.5]],
 });
 

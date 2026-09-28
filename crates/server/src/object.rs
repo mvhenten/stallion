@@ -28,6 +28,15 @@ pub enum PencilSize {
     Large,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StrokeStyle {
+    #[default]
+    Pen,
+    Highlighter,
+    Dashed,
+    Uniform,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShapeKind {
     Rectangle,
@@ -49,6 +58,8 @@ pub struct Stroke {
     pub size: PencilSize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f64>,
+    #[serde(default)]
+    pub style: StrokeStyle,
     pub points: Vec<Point>,
 }
 
@@ -233,7 +244,12 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn golden_stroke(colour: u8, rgb: Option<u32>, width: Option<f64>) -> StallionObject {
+    fn golden_stroke(
+        colour: u8,
+        rgb: Option<u32>,
+        width: Option<f64>,
+        style: StrokeStyle,
+    ) -> StallionObject {
         StallionObject::Stroke(Stroke {
             object_id: "stroke-0001".into(),
             native_zoom: -3,
@@ -247,6 +263,7 @@ pub(crate) mod tests {
             rgb,
             size: PencilSize::Medium,
             width,
+            style,
             points: vec![(10.0, 12.5, 0.5), (26.0, 20.0, 0.75), (42.0, 30.25, 1.0)],
         })
     }
@@ -255,13 +272,43 @@ pub(crate) mod tests {
     fn decodes_the_golden_stroke_fixture() {
         assert_eq!(
             decode(&fixture()),
-            Ok(golden_stroke(0, Some(0x12_3456), Some(12.5)))
+            Ok(golden_stroke(
+                0,
+                Some(0x12_3456),
+                Some(12.5),
+                StrokeStyle::Highlighter
+            ))
         );
     }
 
     #[test]
-    fn decodes_the_legacy_stroke_fixture_without_rgb_or_width() {
-        assert_eq!(decode(&legacy_fixture()), Ok(golden_stroke(2, None, None)));
+    fn decodes_the_legacy_stroke_fixture_without_rgb_width_or_style_as_pen() {
+        assert_eq!(
+            decode(&legacy_fixture()),
+            Ok(golden_stroke(2, None, None, StrokeStyle::Pen))
+        );
+    }
+
+    #[test]
+    fn round_trips_every_stroke_style_and_rejects_an_unknown_one() {
+        for style in [
+            StrokeStyle::Pen,
+            StrokeStyle::Highlighter,
+            StrokeStyle::Dashed,
+            StrokeStyle::Uniform,
+        ] {
+            let stroke = golden_stroke(0, Some(0x12_3456), Some(12.5), style);
+            let mut bytes = Vec::new();
+            ciborium::into_writer(&stroke, &mut bytes).unwrap();
+            assert_eq!(decode(&bytes), Ok(stroke));
+        }
+        let mut unknown = fixture();
+        let at = unknown
+            .windows(11)
+            .position(|w| w == b"Highlighter")
+            .unwrap();
+        unknown[at..at + 11].copy_from_slice(b"Highlightxr");
+        assert!(decode(&unknown).is_err());
     }
 
     #[test]

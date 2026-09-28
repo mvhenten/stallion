@@ -4,6 +4,7 @@ import {
   MAX_INK_POINTS,
   type PencilSize,
   type Point,
+  type StrokeStyle,
   withRgb,
   withWidth,
 } from "@stallion/schema";
@@ -21,6 +22,7 @@ export type InkStroke = {
   rgb: number;
   size: PencilSize;
   width: number;
+  style: StrokeStyle;
   nativeZoom: number;
 };
 
