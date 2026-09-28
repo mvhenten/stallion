@@ -3,6 +3,8 @@ import {
   PENCIL_PX,
   parseRgbHex,
   rgbHex,
+  SHAPE_KINDS,
+  type ShapeKind,
   STROKE_STYLES,
   type StrokeStyle,
 } from "@stallion/schema";
@@ -62,6 +64,31 @@ function StyleIcon({ style }: { style: StrokeStyle }) {
       ) : (
         <path d={STYLE_WAVE} fill="none" stroke="currentColor" {...STYLE_STROKE[style]} />
       )}
+    </svg>
+  );
+}
+
+const SHAPE_ICON: Record<ShapeKind, string> = {
+  Rectangle: "M4 6h16v12H4z",
+  Ellipse: "M2 12a10 7 0 1 0 20 0a10 7 0 1 0-20 0",
+  Line: "M5 19L19 5",
+  Arrow: "M5 19L19 5M10 5h9v9",
+};
+
+function FillIcon({ on }: { on: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <rect
+        x="4"
+        y="5"
+        width="16"
+        height="14"
+        rx="1"
+        fill={on ? "currentColor" : "none"}
+        fill-opacity="0.3"
+        stroke="currentColor"
+        stroke-width="2"
+      />
     </svg>
   );
 }
@@ -190,15 +217,17 @@ export function Toolbar({
     const after = expandedAfterPick(wide, expanded);
     if (after !== expanded) expand(after);
   };
+  const drawMode: Tool["mode"] = tool.mode === "Shape" ? "Shape" : "Pencil";
+  const drawing = tool.mode === "Pencil" || tool.mode === "Shape";
   const pickCustom = (rgb: number, slot: "primary" | "secondary" = "primary") => {
     const next = withRecentColour(recentColours, rgb);
     setRecentColours(next);
     saveRecentColours(storage, next);
-    pick({ ...tool, [slot]: rgb, mode: "Pencil" });
+    pick({ ...tool, [slot]: rgb, mode: drawMode });
   };
   const pickStyle = (style: StrokeStyle) => {
     saveStyle(storage, style);
-    pick({ ...tool, style, mode: "Pencil" });
+    pick({ ...tool, style, mode: drawMode });
   };
   const toggleMode = (mode: Tool["mode"]) =>
     pick({ ...tool, mode: tool.mode === mode ? "Pencil" : mode });
@@ -210,10 +239,10 @@ export function Toolbar({
           <button
             key={size}
             type="button"
-            aria-pressed={tool.mode === "Pencil" && tool.width === PENCIL_PX[size]}
+            aria-pressed={drawing && tool.width === PENCIL_PX[size]}
             aria-label={`${size} pencil`}
             class="tool"
-            onClick={() => pick({ ...tool, width: PENCIL_PX[size], mode: "Pencil" })}
+            onClick={() => pick({ ...tool, width: PENCIL_PX[size], mode: drawMode })}
           >
             <span class="dot" style={{ width: DOT_PX[size], height: DOT_PX[size] }} />
           </button>
@@ -226,10 +255,10 @@ export function Toolbar({
           <button
             key={width}
             type="button"
-            aria-pressed={tool.mode === "Pencil" && tool.width === width}
+            aria-pressed={drawing && tool.width === width}
             aria-label={`${width} px pencil`}
             class="tool width-preset"
-            onClick={() => pick({ ...tool, width, mode: "Pencil" })}
+            onClick={() => pick({ ...tool, width, mode: drawMode })}
           >
             {width}
           </button>
@@ -247,7 +276,7 @@ export function Toolbar({
             onChange({
               ...tool,
               width: sliderToWidth(Number(event.currentTarget.value)),
-              mode: "Pencil",
+              mode: drawMode,
             })
           }
         />
@@ -262,7 +291,7 @@ export function Toolbar({
           <button
             key={style}
             type="button"
-            aria-pressed={tool.mode === "Pencil" && tool.style === style}
+            aria-pressed={drawing && tool.style === style}
             aria-label={`${style} style`}
             title={STYLE_TITLE[style]}
             class="tool"
@@ -272,6 +301,40 @@ export function Toolbar({
             <StyleIcon style={style} />
           </button>
         ))}
+      </fieldset>
+    ),
+    Shapes: () => (
+      <fieldset key="Shapes" class="group" aria-label="Shape">
+        {SHAPE_KINDS.map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            aria-pressed={tool.mode === "Shape" && tool.shape === kind}
+            aria-label={kind}
+            title={`Drag to draw a ${kind.toLowerCase()}`}
+            class="tool"
+            data-shape={kind}
+            onClick={() =>
+              pick({
+                ...tool,
+                shape: kind,
+                mode: tool.mode === "Shape" && tool.shape === kind ? "Pencil" : "Shape",
+              })
+            }
+          >
+            <Icon d={SHAPE_ICON[kind]} join />
+          </button>
+        ))}
+        <button
+          type="button"
+          aria-pressed={tool.fill === "Tint"}
+          aria-label="Fill shapes"
+          title="Fill rectangles and ellipses with a light tint of the colour"
+          class="tool"
+          onClick={() => pick({ ...tool, fill: tool.fill === "Tint" ? "None" : "Tint" })}
+        >
+          <FillIcon on={tool.fill === "Tint"} />
+        </button>
       </fieldset>
     ),
     Colours: () => (
@@ -381,7 +444,7 @@ export function Toolbar({
         class="tool"
         aria-pressed={tool.mode === "Select"}
         aria-label="Select tool"
-        title="Tap a stroke to select it, drag to move it, Delete to remove it"
+        title="Tap a stroke or shape to select it, drag to move it, Delete to remove it"
         onClick={() => toggleMode("Select")}
       >
         <Icon d="M5 3l14 8-6 2-3 6-5-16z" join />
@@ -394,7 +457,7 @@ export function Toolbar({
         class="tool"
         aria-pressed={tool.mode === "Eraser"}
         aria-label="Eraser"
-        title="Tap or drag across a stroke to delete it"
+        title="Tap or drag across a stroke or shape to delete it"
         onClick={() => toggleMode("Eraser")}
       >
         <Icon d="M16 3l5 5-11 11H5l-3-3L16 3zM9 10l5 5M10 21h11" join />

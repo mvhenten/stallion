@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 import { decode, encode } from "./codec";
 import type { StallionObject } from "./model";
 import { stallionObject } from "./model";
+import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
 import { STROKE_STYLES } from "./style";
 
 const stroke: StallionObject = {
@@ -23,19 +24,25 @@ const stroke: StallionObject = {
   ],
 };
 
+const shape: StallionObject = {
+  type: "Shape",
+  objectId: "shape-0001",
+  nativeZoom: 0,
+  bbox: { minX: 0, minY: 0, maxX: 256, maxY: 128 },
+  colour: 5,
+  rgb: 0x8e4ec6,
+  size: "Large",
+  width: 20,
+  style: "Dashed",
+  kind: "Arrow",
+  start: [240.5, 12],
+  end: [16, 116.25],
+  fill: "Tint",
+};
+
 const objects: StallionObject[] = [
   stroke,
-  {
-    type: "Shape",
-    objectId: "shape-0001",
-    nativeZoom: 0,
-    bbox: { minX: 0, minY: 0, maxX: 256, maxY: 128 },
-    colour: 5,
-    rgb: 0x8e4ec6,
-    size: "Large",
-    width: 20,
-    shape: "Ellipse",
-  },
+  shape,
   {
     type: "Text",
     objectId: "text-0001",
@@ -62,6 +69,18 @@ test.each(objects)("round-trips a $type", (object) => {
 test.each(STROKE_STYLES)("round-trips a %s stroke", (style) => {
   const styled: StallionObject = { ...stroke, style };
   expect(decode(encode(styled))).toEqual({ ok: true, value: styled });
+});
+
+test.each(SHAPE_KINDS.flatMap((kind) => SHAPE_FILLS.map((fill) => ({ kind, fill }))))(
+  "round-trips a $kind shape with fill $fill",
+  ({ kind, fill }) => {
+    const variant: StallionObject = { ...shape, kind, fill };
+    expect(decode(encode(variant))).toEqual({ ok: true, value: variant });
+  },
+);
+
+test("matches the golden shape fixture", async () => {
+  await expect(hex(encode(shape))).toMatchFileSnapshot("../fixtures/shape.cbor.hex");
 });
 
 test("matches the golden stroke fixture", async () => {
@@ -102,6 +121,11 @@ test.each([
   ["a pressure above one", { ...stroke, points: [[0, 0, 1.5]] }],
   ["a zoom level beyond 40", { ...stroke, nativeZoom: 41 }],
   ["an unknown field", { ...stroke, extra: true }],
+  ["an unknown shape kind", { ...shape, kind: "Star" }],
+  ["an unknown shape fill", { ...shape, fill: "Solid" }],
+  ["a shape without an end", { ...shape, end: undefined }],
+  ["a shape point with three coordinates", { ...shape, start: [1, 2, 3] }],
+  ["a shape width above 96", { ...shape, width: 97 }],
 ])("rejects %s", (_, invalid) => {
   expect(stallionObject.safeParse(invalid).success).toBe(false);
   expect(decode(raw.encode(invalid))).toMatchObject({ ok: false });

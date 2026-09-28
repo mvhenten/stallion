@@ -1,7 +1,9 @@
 import type { StoredObject } from "@stallion/client-store";
 import type { LiveObjects } from "@stallion/client-sync";
+import type { Shape } from "@stallion/schema";
 import { afterEach, expect, test, vi } from "vitest";
-import { createSurface, INK_ALPHA, PAPER } from "./surface";
+import { shapeWorldPoints } from "./shape";
+import { createSurface, INK_ALPHA, PAPER, type Tool } from "./surface";
 import type { Awareness, DrawingSource } from "./sync";
 
 const stored: StoredObject = {
@@ -22,13 +24,69 @@ const stored: StoredObject = {
   },
 };
 
+type Handler = (state: { event: unknown; intentional: boolean }) => void;
+
+const gesture = vi.hoisted(() => ({ handlers: {} as Record<string, Handler> }));
+
+vi.mock("@use-gesture/vanilla", () => ({
+  Gesture: class {
+    constructor(_target: unknown, handlers: Record<string, Handler>) {
+      gesture.handlers = handlers;
+    }
+    destroy() {}
+  },
+}));
+
 afterEach(() => vi.unstubAllGlobals());
 
-const PENCIL = { width: 8, style: "Pen", primary: 0, secondary: 4, mode: "Pencil" } as const;
+const PENCIL: Tool = {
+  width: 8,
+  style: "Pen",
+  primary: 0,
+  secondary: 4,
+  shape: "Rectangle",
+  fill: "None",
+  mode: "Pencil",
+};
+
+type Screen = { x: number; y: number };
+
+const pointer = (type: string, { x, y }: Screen) => ({
+  type,
+  pointerId: 1,
+  pointerType: "mouse",
+  button: 0,
+  clientX: x,
+  clientY: y,
+  timeStamp: 0,
+  preventDefault: () => undefined,
+});
+
+const dragAlong = (from: Screen, to: Screen) => {
+  const onDrag = gesture.handlers.onDrag;
+  if (!onDrag) throw new Error("the surface bound no drag handler");
+  onDrag({ event: pointer("pointerdown", from), intentional: false });
+  onDrag({ event: pointer("pointermove", to), intentional: true });
+  onDrag({ event: pointer("pointerup", to), intentional: true });
+};
 
 const harness = (initial: StoredObject[], awareness?: Awareness) => {
   const calls: string[] = [];
+  const commits: StoredObject[] = [];
+  const erased: string[] = [];
+  let tool = PENCIL;
   const context = {
+    beginPath: () => undefined,
+    rect: () => undefined,
+    ellipse: () => undefined,
+    moveTo: () => undefined,
+    lineTo: () => undefined,
+    closePath: () => undefined,
+    setLineDash: () => undefined,
+    stroke: function (this: { strokeStyle: string }) {
+      calls.push(`stroke ${this.strokeStyle}`);
+    },
+    strokeStyle: "",
     setTransform: () => undefined,
     clearRect: () => calls.push("clearRect"),
     fillRect: function (this: { fillStyle: string }) {
@@ -68,6 +126,7 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     width: 0,
     height: 0,
     getContext: () => context,
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
   } as unknown as HTMLCanvasElement;
   const store = new Map(initial.map((entry) => [entry.object.objectId, entry]));
   const observers = new Set<(changed: ReadonlySet<string>) => void>();
@@ -79,8 +138,8 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
   }) as LiveObjects;
   const source: DrawingSource = {
     view: () => undefined,
-    commit: () => undefined,
-    erase: () => undefined,
+    commit: (entry) => commits.push(entry),
+    erase: (objectId) => erased.push(objectId),
     objects,
     hints: { current: [], observe: () => () => undefined },
     history: {
@@ -94,7 +153,7 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     awareness,
     close: () => Promise.resolve(),
   };
-  const surface = createSurface(canvas, "board", source, () => PENCIL);
+  const surface = createSurface(canvas, "board", source, () => tool);
   const paint = () => {
     calls.length = 0;
     for (const callback of frames.splice(0)) callback(0);
@@ -104,7 +163,10 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     store.set(entry.object.objectId, entry);
     for (const observer of observers) observer(new Set([entry.object.objectId]));
   };
-  return { surface, paint, arrive };
+  const use = (next: Partial<Tool>) => {
+    tool = { ...tool, ...next };
+  };
+  return { surface, paint, arrive, use, commits, erased };
 };
 
 test("each frame paints the paper before any stroke", () => {
@@ -148,4 +210,40 @@ test("a remote stroke in progress gives way to its committed object", () => {
   surface.dispose();
 
   expect(calls).toEqual([`fillRect ${PAPER}`, "fill #0090ff"]);
+});
+
+test("draws a rectangle, moves it by its edge and erases it where it landed", () => {
+  const { surface, paint, arrive, use, commits, erased } = harness([]);
+  use({ mode: "Shape", shape: "Rectangle", fill: "Tint", primary: 0x8e4ec6 });
+  dragAlong({ x: 100, y: 100 }, { x: 200, y: 150 });
+
+  const [drawn] = commits;
+  if (drawn?.object.type !== "Shape") throw new Error("no shape committed");
+  expect(drawn.object).toMatchObject({ kind: "Rectangle", fill: "Tint", rgb: 0x8e4ec6 });
+  expect(shapeWorldPoints(drawn.tile, drawn.object)).toEqual({
+    start: { x: 100, y: 100 },
+    end: { x: 200, y: 150 },
+  });
+  arrive(drawn);
+  expect(paint()).toEqual([`fillRect ${PAPER}`, "ink #8e4ec6", "stroke #8e4ec6"]);
+
+  use({ mode: "Select" });
+  dragAlong({ x: 150, y: 100 }, { x: 150, y: 300 });
+  const moved = commits[1];
+  if (moved?.object.type !== "Shape") throw new Error("no move committed");
+  expect(moved.object.objectId).toBe(drawn.object.objectId);
+  const { start, end } = shapeWorldPoints(moved.tile, moved.object as Shape);
+  expect(start.x).toBeCloseTo(100, 9);
+  expect(start.y).toBeCloseTo(300, 9);
+  expect(end.x).toBeCloseTo(200, 9);
+  expect(end.y).toBeCloseTo(350, 9);
+  arrive(moved);
+
+  use({ mode: "Eraser" });
+  dragAlong({ x: 150, y: 125 }, { x: 150, y: 125 });
+  expect(erased).toEqual([]);
+  dragAlong({ x: 150, y: 325 }, { x: 150, y: 325 });
+  surface.dispose();
+
+  expect(erased).toContain(drawn.object.objectId);
 });

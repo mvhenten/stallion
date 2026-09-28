@@ -44,6 +44,7 @@ const historyKey = (event: KeyboardEvent): "Undo" | "Redo" | undefined => {
 
 const SURFACE_CLASS: Record<ToolMode, string> = {
   Pencil: "surface",
+  Shape: "surface",
   Pan: "surface panning",
   Eraser: "surface erasing",
   Select: "surface selecting",
@@ -56,6 +57,8 @@ export function Board({ boardId }: { boardId: string }) {
     style: loadStyle(() => localStorage),
     primary: PALETTE_RGB[0],
     secondary: PALETTE_RGB[4],
+    shape: "Rectangle",
+    fill: "None",
     mode: "Pencil",
   });
   const [error, setError] = useState<string | undefined>(undefined);

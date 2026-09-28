@@ -18,6 +18,7 @@ export type Control =
   | "Sizes"
   | "Width"
   | "Styles"
+  | "Shapes"
   | "Colours"
   | "CustomColour"
   | "RecentColours"
@@ -66,7 +67,7 @@ const EXPANDED_ROWS: readonly (readonly Control[])[] = [
   COLLAPSED_ROW,
   ["Sizes", "Pan", "Select", "Redo", "Share"],
   ["Colours", "Swap"],
-  ["Flip"],
+  ["Shapes", "Flip"],
 ];
 
 const PALETTE_ROWS: readonly (readonly Control[])[] = [
@@ -74,6 +75,7 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Sizes"],
   ["Width"],
   ["Styles"],
+  ["Shapes"],
   ["Colours"],
   ["CustomColour", "RecentColours"],
   ["Swap", "Pan", "Select", "Eraser"],

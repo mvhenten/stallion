@@ -16,6 +16,9 @@ import {
   nearestSize,
   rgbHex,
   rgbOf,
+  type Shape,
+  type ShapeFill,
+  type ShapeKind,
   type Stroke,
   type StrokeStyle,
 } from "@stallion/schema";
@@ -31,7 +34,7 @@ import {
   zoomAt,
   zoomTo,
 } from "./camera";
-import { hitsStroke } from "./eraser";
+import { hitsShape, hitsStroke } from "./eraser";
 import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
 import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
@@ -45,6 +48,16 @@ import {
   type Viewport,
   viewportOf,
 } from "./presence";
+import {
+  finishShape,
+  paintShape,
+  type ShapeDraft,
+  shapeLook,
+  shapeScreenInk,
+  shapeWorldPoints,
+  startShape,
+  translateShape,
+} from "./shape";
 import {
   continueDraft,
   type Draft,
@@ -61,17 +74,31 @@ import {
 } from "./stroke";
 import type { DrawingSource } from "./sync";
 
-export type ToolMode = "Pencil" | "Pan" | "Eraser" | "Select";
+export type ToolMode = "Pencil" | "Shape" | "Pan" | "Eraser" | "Select";
 
 export type Tool = {
   width: number;
   style: StrokeStyle;
   primary: number;
   secondary: number;
+  shape: ShapeKind;
+  fill: ShapeFill;
   mode: ToolMode;
 };
 
-type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; ink: StrokeInk };
+type Entry =
+  | { type: "Stroke"; tile: Tile; object: Stroke; frame: StrokeFrame; ink: StrokeInk }
+  | { type: "Shape"; tile: Tile; object: Shape; start: Point; end: Point };
+
+const hits = (entry: Entry, world: Point, zoom: number): boolean =>
+  entry.type === "Stroke"
+    ? hitsStroke(entry.tile, entry.object, world, zoom)
+    : hitsShape(entry.tile, entry.object, world, zoom);
+
+const translate = (entry: Entry, dx: number, dy: number): StoredObject | undefined =>
+  entry.type === "Stroke"
+    ? translateStroke(entry.tile, entry.object, dx, dy)
+    : translateShape(entry.tile, entry.object, dx, dy);
 
 type Drag = { objectId: string; from: Point; dx: number; dy: number };
 
@@ -171,6 +198,7 @@ export function createSurface(
   let ordered: Entry[] = [];
   let camera = loadCamera(boardId);
   let draft: Draft | undefined;
+  let shapeDraft: ShapeDraft | undefined;
   let eraser: Point | undefined;
   let selected: string | undefined;
   let drag: Drag | undefined;
@@ -210,15 +238,26 @@ export function createSurface(
     });
     const markers: Marker[] = [];
     for (const entry of ordered) {
-      const dragged = drag?.objectId === entry.stroke.objectId ? drag : undefined;
-      const culled = dragged ? "Draw" : cull(entry.stroke.bbox, view, camera.zoom);
+      const dragged = drag?.objectId === entry.object.objectId ? drag : undefined;
+      const culled = dragged ? "Draw" : cull(entry.object.bbox, view, camera.zoom);
       if (culled === "Skip") continue;
+      const colour = rgbHex(rgbOf(entry.object));
       if (culled === "Marker") {
-        const style = rgbHex(rgbOf(entry.stroke));
-        markers.push({ ...toDevice(bboxCentre(entry.stroke.bbox)), style });
+        markers.push({ ...toDevice(bboxCentre(entry.object.bbox)), style: colour });
         continue;
       }
       const offset = dragged ?? { dx: 0, dy: 0 };
+      if (entry.type === "Shape") {
+        const shift = (world: Point): Point =>
+          worldToScreen(camera, { x: world.x + offset.dx, y: world.y + offset.dy });
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        paintShape(
+          ctx,
+          shapeScreenInk(shapeLook(entry.object), entry.start, entry.end, shift, camera.zoom),
+          colour,
+        );
+        continue;
+      }
       const { origin } = entry.frame;
       const scale = entry.frame.scale * camera.zoom * dpr;
       ctx.setTransform(
@@ -229,7 +268,7 @@ export function createSurface(
         (origin.x + offset.dx - camera.x) * camera.zoom * dpr,
         (origin.y + offset.dy - camera.y) * camera.zoom * dpr,
       );
-      paintInk(ctx, entry.ink, rgbHex(rgbOf(entry.stroke)));
+      paintInk(ctx, entry.ink, colour);
     }
     renderMarkers(
       source.hints.current.map((hint) => ({
@@ -245,6 +284,20 @@ export function createSurface(
         ctx,
         draftScreenInk(draft, (world) => worldToScreen(camera, world), camera.zoom),
         rgbHex(draft.rgb),
+      );
+    }
+    if (shapeDraft) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      paintShape(
+        ctx,
+        shapeScreenInk(
+          shapeDraft,
+          shapeDraft.start,
+          shapeDraft.end,
+          (world) => worldToScreen(camera, world),
+          camera.zoom,
+        ),
+        rgbHex(shapeDraft.rgb),
       );
     }
     renderSelection(dpr);
@@ -278,7 +331,7 @@ export function createSurface(
     const entry = selected === undefined ? undefined : entries.get(selected);
     if (!entry) return;
     const { dx, dy } = drag ?? { dx: 0, dy: 0 };
-    const { bbox } = entry.stroke;
+    const { bbox } = entry.object;
     const topLeft = worldToScreen(camera, { x: bbox.minX + dx, y: bbox.minY + dy });
     const bottomRight = worldToScreen(camera, { x: bbox.maxX + dx, y: bbox.maxY + dy });
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -321,14 +374,23 @@ export function createSurface(
     publishViewport();
   };
 
-  const add = ({ tile, object }: StoredObject) => {
-    if (object.type !== "Stroke") return;
+  const entryOf = ({ tile, object }: StoredObject): Entry | undefined => {
+    if (object.type === "Shape") {
+      return { type: "Shape", tile, object, ...shapeWorldPoints(tile, object) };
+    }
+    if (object.type !== "Stroke") return undefined;
     const frame = strokeFrame(tile, object);
-    const entry = { tile, stroke: object, frame, ink: strokeFrameInk(object, frame) };
+    return { type: "Stroke", tile, object, frame, ink: strokeFrameInk(object, frame) };
+  };
+
+  const add = (stored: StoredObject) => {
+    const entry = entryOf(stored);
+    if (!entry) return;
+    const { object } = entry;
     const previous = entries.get(object.objectId);
     entries.set(object.objectId, entry);
     const rest = previous ? ordered.filter((other) => other !== previous) : ordered;
-    const index = rest.findIndex((other) => other.stroke.objectId > object.objectId);
+    const index = rest.findIndex((other) => other.object.objectId > object.objectId);
     ordered =
       index === -1 ? [...rest, entry] : [...rest.slice(0, index), entry, ...rest.slice(index)];
   };
@@ -338,9 +400,8 @@ export function createSurface(
     const view = viewBounds(camera, width, height);
     const world = screenToWorld(camera, screen);
     for (const entry of ordered) {
-      if (cull(entry.stroke.bbox, view, camera.zoom) !== "Draw") continue;
-      if (hitsStroke(entry.tile, entry.stroke, world, camera.zoom))
-        source.erase(entry.stroke.objectId);
+      if (cull(entry.object.bbox, view, camera.zoom) !== "Draw") continue;
+      if (hits(entry, world, camera.zoom)) source.erase(entry.object.objectId);
     }
   };
 
@@ -363,16 +424,15 @@ export function createSurface(
     const world = screenToWorld(camera, screen);
     return ordered.findLast(
       (entry) =>
-        cull(entry.stroke.bbox, view, camera.zoom) === "Draw" &&
-        hitsStroke(entry.tile, entry.stroke, world, camera.zoom),
+        cull(entry.object.bbox, view, camera.zoom) === "Draw" && hits(entry, world, camera.zoom),
     );
   };
 
   const startDrag = (screen: Point) => {
     const hit = pick(screen);
-    selected = hit?.stroke.objectId;
+    selected = hit?.object.objectId;
     drag = hit && {
-      objectId: hit.stroke.objectId,
+      objectId: hit.object.objectId,
       from: screenToWorld(camera, screen),
       dx: 0,
       dy: 0,
@@ -390,7 +450,7 @@ export function createSurface(
     drag = undefined;
     const entry = moved && entries.get(moved.objectId);
     if (!moved || !entry || (moved.dx === 0 && moved.dy === 0)) return;
-    const stored = translateStroke(entry.tile, entry.stroke, moved.dx, moved.dy);
+    const stored = translate(entry, moved.dx, moved.dy);
     if (stored) source.commit(stored);
   };
 
@@ -490,7 +550,7 @@ export function createSurface(
   };
 
   const reportView = () => {
-    const contentLevels = [...new Set(ordered.map((entry) => entry.stroke.nativeZoom))].sort(
+    const contentLevels = [...new Set(ordered.map((entry) => entry.object.nativeZoom))].sort(
       (a, b) => a - b,
     );
     const level = levelOf(camera.zoom);
@@ -559,6 +619,15 @@ export function createSurface(
     publisher?.clear();
   };
 
+  const commitShape = () => {
+    if (!shapeDraft) return;
+    const stored = finishShape(shapeDraft);
+    shapeDraft = undefined;
+    if (!stored) return;
+    source.commit(stored);
+    onCommit();
+  };
+
   const toLocal = (clientX: number, clientY: number): Point => {
     const rect = canvas.getBoundingClientRect();
     return { x: clientX - rect.left, y: clientY - rect.top };
@@ -601,6 +670,18 @@ export function createSurface(
             eraseTo(effect.point);
             break;
           }
+          if (tool.mode === "Shape") {
+            shapeDraft = startShape(
+              tool.shape,
+              tool.fill,
+              effect.secondary ? tool.secondary : tool.primary,
+              tool.width,
+              tool.style,
+              camera.zoom,
+              screenToWorld(camera, effect.point),
+            );
+            break;
+          }
           draft = startDraft(
             effect.secondary ? tool.secondary : tool.primary,
             tool.width,
@@ -617,6 +698,7 @@ export function createSurface(
           for (const sample of samples.length > 0 ? samples : [event]) {
             if (drag) dragTo(localPoint(sample));
             else if (eraser) eraseTo(localPoint(sample));
+            else if (shapeDraft) shapeDraft.end = screenToWorld(camera, localPoint(sample));
             else addPoint(localPoint(sample), pressureOf(sample));
           }
           break;
@@ -625,12 +707,14 @@ export function createSurface(
           eraser = undefined;
           drop();
           commit();
+          commitShape();
           source.history.checkpoint();
           break;
         case "DiscardStroke":
           eraser = undefined;
           drag = undefined;
           draft = undefined;
+          shapeDraft = undefined;
           publisher?.clear();
           source.history.checkpoint();
           break;

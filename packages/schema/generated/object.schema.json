@@ -173,12 +173,58 @@
           "minimum": 0.5,
           "maximum": 96
         },
-        "shape": {
+        "style": {
+          "default": "Pen",
+          "type": "string",
+          "enum": [
+            "Pen",
+            "Highlighter",
+            "Dashed",
+            "Uniform"
+          ]
+        },
+        "kind": {
           "type": "string",
           "enum": [
             "Rectangle",
             "Ellipse",
-            "Line"
+            "Line",
+            "Arrow"
+          ]
+        },
+        "start": {
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "end": {
+          "type": "array",
+          "items": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "additionalItems": false,
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "fill": {
+          "type": "string",
+          "enum": [
+            "None",
+            "Tint"
           ]
         }
       },
@@ -189,7 +235,10 @@
         "bbox",
         "colour",
         "size",
-        "shape"
+        "kind",
+        "start",
+        "end",
+        "fill"
       ],
       "additionalProperties": false
     },

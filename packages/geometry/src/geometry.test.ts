@@ -4,13 +4,16 @@ import {
   contains,
   cull,
   dedupeMarkers,
+  ellipseDistance,
   fromTileLocal,
+  insideEllipse,
   isSubPixel,
   MARKER_PX,
   MAX_LEVEL,
   MIN_LEVEL,
   nativeLevel,
   place,
+  segmentDistance,
   tileBounds,
   tileKey,
   tileScreenSize,
@@ -164,5 +167,53 @@ describe("culling", () => {
       { x: 12, y: 20, style: "c" },
       { x: -MARKER_PX, y: 0, style: "d" },
     ]);
+  });
+});
+
+describe("distance", () => {
+  const a = { x: 0, y: 0 };
+  const b = { x: 10, y: 0 };
+
+  test("a segment measures to its nearest point, its ends included", () => {
+    expect(segmentDistance({ x: 5, y: 3 }, a, b)).toBe(3);
+    expect(segmentDistance({ x: -3, y: 4 }, a, b)).toBe(5);
+    expect(segmentDistance({ x: 13, y: -4 }, a, b)).toBe(5);
+    expect(segmentDistance({ x: 3, y: 4 }, a, a)).toBe(5);
+  });
+
+  test("an ellipse measures to its outline from inside and outside", () => {
+    const centre = { x: 100, y: 50 };
+    expect(ellipseDistance({ x: 110, y: 50 }, centre, 10, 5)).toBeCloseTo(0, 6);
+    expect(ellipseDistance({ x: 100, y: 55 }, centre, 10, 5)).toBeCloseTo(0, 6);
+    expect(ellipseDistance({ x: 120, y: 50 }, centre, 10, 5)).toBeCloseTo(10, 6);
+    expect(ellipseDistance({ x: 100, y: 50 }, centre, 10, 5)).toBeCloseTo(5, 6);
+    expect(ellipseDistance({ x: 100, y: 42 }, centre, 10, 5)).toBeCloseTo(3, 6);
+    expect(
+      ellipseDistance({ x: 100 + 20 * Math.SQRT1_2, y: 50 + 20 * Math.SQRT1_2 }, centre, 10, 10),
+    ).toBeCloseTo(10, 6);
+  });
+
+  test("an ellipse point on the outline is at distance zero at any angle", () => {
+    fc.assert(
+      fc.property(
+        fc.double({ min: 0, max: Math.PI * 2, noNaN: true }),
+        fc.double({ min: 1, max: 1000, noNaN: true }),
+        fc.double({ min: 1, max: 1000, noNaN: true }),
+        (angle, rx, ry) => {
+          const p = { x: rx * Math.cos(angle), y: ry * Math.sin(angle) };
+          return ellipseDistance(p, { x: 0, y: 0 }, rx, ry) < Math.max(rx, ry) * 1e-3;
+        },
+      ),
+    );
+  });
+
+  test("a flat ellipse measures as the segment it collapses to", () => {
+    expect(ellipseDistance({ x: 5, y: 3 }, a, 10, 0)).toBe(3);
+    expect(insideEllipse({ x: 5, y: 0 }, a, 10, 0)).toBe(false);
+  });
+
+  test("the inside of an ellipse includes its centre and excludes its bbox corner", () => {
+    expect(insideEllipse({ x: 0, y: 0 }, a, 10, 5)).toBe(true);
+    expect(insideEllipse({ x: 9, y: 4.5 }, a, 10, 5)).toBe(false);
   });
 });

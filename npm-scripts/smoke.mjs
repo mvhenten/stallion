@@ -630,6 +630,117 @@ const smokeHighlighter = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
+const SHAPE_DEVICES = [DEVICE, "Pixel 7"];
+const SHAPE_ROWS = 5;
+const SHAPE_KINDS = ["Rectangle", "Ellipse", "Line", "Arrow"];
+const MOVED_ROW = 4;
+const EMPTY_RATIO = 0.002;
+
+const shapeRows = (viewport, left) => {
+  const right = viewport.width - 16;
+  const top = 16;
+  const height = (viewport.height - 90 - top) / SHAPE_ROWS;
+  return Array.from({ length: SHAPE_ROWS }, (_, row) => {
+    const y = top + row * height;
+    const box = {
+      from: { x: left + 10, y: y + height * 0.2 },
+      to: { x: right - 10, y: y + height * 0.8 },
+    };
+    return { box, clip: { x: left, y, width: right - left, height } };
+  });
+};
+
+const smokeShapes = async ({ browser, devices, analyser, url, dir, device }) => {
+  const label = `shapes ${device}`;
+  const context = await browser.newContext({ ...devices[device], colorScheme: "light" });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`${label}: ${problems[0]}`);
+  };
+  const prefix = `shapes-${device.toLowerCase().replace(/\W+/g, "-")}`;
+  const shot = async (name, clip) => {
+    const path = join(dir, `${prefix}-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  const inked = async (rows, blanks, stage) => {
+    const ratios = [];
+    for (const [index, row] of rows.entries()) {
+      const after = await shot(`row${index}-${stage}`, row.clip);
+      ratios.push((await inkStats(analyser, blanks[index].buffer, after.buffer)).changedRatio);
+    }
+    return ratios;
+  };
+  const expectRows = (ratios, filled, stage) => {
+    for (const [index, ratio] of ratios.entries()) {
+      const want = filled.includes(index);
+      if (want && ratio < MIN_INK_RATIO) fail(`${label}: row ${index} is empty ${stage}`);
+      if (!want && ratio > EMPTY_RATIO) {
+        fail(`${label}: row ${index} should be empty ${stage}, ink ${ratio.toFixed(3)}`);
+      }
+    }
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail(`${label}: no palette bounding box`);
+    const rows = shapeRows(viewport, box.x + box.width + CLIP_PAD);
+    const blanks = [];
+    for (const [index, row] of rows.entries())
+      blanks.push(await shot(`row${index}-before`, row.clip));
+    const fill = palette.getByRole("button", { name: "Fill shapes" });
+    for (const [index, kind] of SHAPE_KINDS.entries()) {
+      await palette.getByRole("button", { name: kind, exact: true }).tap();
+      const filled = (await fill.getAttribute("aria-pressed")) === "true";
+      if (filled !== (index === 0)) await fill.tap();
+      await drawWithTouch(page, linePath(rows[index].box.from, rows[index].box.to));
+      await page.waitForTimeout(400);
+    }
+    await page.waitForTimeout(800);
+    const drawn = await shot("drawn");
+    expectRows(await inked(rows, blanks, "drawn"), [0, 1, 2, 3], "after drawing");
+    check();
+    await palette.getByRole("button", { name: "Select tool" }).tap();
+    const from = {
+      x: (rows[0].box.from.x + rows[0].box.to.x) / 2,
+      y: (rows[0].box.from.y + rows[0].box.to.y) / 2,
+    };
+    const to = { x: from.x, y: from.y + (rows[MOVED_ROW].clip.y - rows[0].clip.y) };
+    await drawWithTouch(page, linePath(from, to));
+    await page.waitForTimeout(1300);
+    const moved = await shot("moved");
+    expectRows(await inked(rows, blanks, "moved"), [1, 2, 3, MOVED_ROW], "after the move");
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const reloaded = await shot("reloaded");
+    const kept = await inked(rows, blanks, "reloaded");
+    expectRows(kept, [1, 2, 3, MOVED_ROW], "after reload");
+    const counts = await countStoredRows(page);
+    if (counts.objects !== SHAPE_KINDS.length) {
+      fail(`${label}: ${counts.objects} objects stored after reload, want ${SHAPE_KINDS.length}`);
+    }
+    check();
+    return {
+      ink: kept.map((ratio) => Number(ratio.toFixed(3))),
+      screenshots: [drawn.path, moved.path, reloaded.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -675,6 +786,20 @@ const main = async () => {
       `PASS highlighter: ${rgbText(highlighter.drawn)} drawn, ${rgbText(highlighter.reloaded)} after reload`,
     );
     for (const path of highlighter.screenshots) console.log(`  ${path}`);
+    for (const device of SHAPE_DEVICES) {
+      const shapes = await smokeShapes({
+        browser,
+        devices,
+        analyser,
+        url: siblingBoard(options.url),
+        dir,
+        device,
+      });
+      console.log(
+        `PASS shapes ${device}: 4 shapes kept after a move and reload, ink ${shapes.ink.join(" ")}`,
+      );
+      for (const path of shapes.screenshots) console.log(`  ${path}`);
+    }
   } finally {
     await browser.close();
   }

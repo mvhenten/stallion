@@ -42,9 +42,18 @@ pub enum ShapeKind {
     Rectangle,
     Ellipse,
     Line,
+    Arrow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShapeFill {
+    None,
+    Tint,
 }
 
 pub type Point = (f64, f64, f64);
+
+pub type ShapePoint = (f64, f64);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -75,7 +84,12 @@ pub struct Shape {
     pub size: PencilSize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f64>,
-    pub shape: ShapeKind,
+    #[serde(default)]
+    pub style: StrokeStyle,
+    pub kind: ShapeKind,
+    pub start: ShapePoint,
+    pub end: ShapePoint,
+    pub fill: ShapeFill,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -183,7 +197,15 @@ impl StallionObject {
         }
         match self {
             StallionObject::Stroke(s) => validate_points(&s.points),
-            StallionObject::Shape(_) => Ok(()),
+            StallionObject::Shape(s) => {
+                if ![s.start.0, s.start.1, s.end.0, s.end.1]
+                    .iter()
+                    .all(|v| v.is_finite())
+                {
+                    return Err("shape start and end must be finite".into());
+                }
+                Ok(())
+            }
             StallionObject::Text(t) => {
                 let len = t.text.encode_utf16().count();
                 if len == 0 || len > MAX_TEXT {
@@ -227,6 +249,12 @@ pub(crate) mod tests {
     pub(crate) fn fixture() -> Vec<u8> {
         from_hex(include_str!(
             "../../../packages/schema/fixtures/stroke.cbor.hex"
+        ))
+    }
+
+    fn shape_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/shape.cbor.hex"
         ))
     }
 
@@ -308,6 +336,91 @@ pub(crate) mod tests {
             .position(|w| w == b"Highlighter")
             .unwrap();
         unknown[at..at + 11].copy_from_slice(b"Highlightxr");
+        assert!(decode(&unknown).is_err());
+    }
+
+    fn golden_shape() -> Shape {
+        Shape {
+            object_id: "shape-0001".into(),
+            native_zoom: 0,
+            bbox: Bbox {
+                min_x: 0.0,
+                min_y: 0.0,
+                max_x: 256.0,
+                max_y: 128.0,
+            },
+            colour: 5,
+            rgb: Some(0x8E_4EC6),
+            size: PencilSize::Large,
+            width: Some(20.0),
+            style: StrokeStyle::Dashed,
+            kind: ShapeKind::Arrow,
+            start: (240.5, 12.0),
+            end: (16.0, 116.25),
+            fill: ShapeFill::Tint,
+        }
+    }
+
+    fn encode(object: StallionObject) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&object, &mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn decodes_the_golden_shape_fixture() {
+        assert_eq!(
+            decode(&shape_fixture()),
+            Ok(StallionObject::Shape(golden_shape()))
+        );
+    }
+
+    #[test]
+    fn round_trips_every_shape_kind_and_fill() {
+        for kind in [
+            ShapeKind::Rectangle,
+            ShapeKind::Ellipse,
+            ShapeKind::Line,
+            ShapeKind::Arrow,
+        ] {
+            for fill in [ShapeFill::None, ShapeFill::Tint] {
+                let shape = StallionObject::Shape(Shape {
+                    kind,
+                    fill,
+                    ..golden_shape()
+                });
+                assert_eq!(decode(&encode(shape.clone())), Ok(shape));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_a_shape_with_a_bad_point_or_width() {
+        let not_finite = Shape {
+            end: (f64::INFINITY, 0.0),
+            ..golden_shape()
+        };
+        assert!(
+            decode(&encode(StallionObject::Shape(not_finite)))
+                .unwrap_err()
+                .contains("start and end")
+        );
+        let too_wide = Shape {
+            width: Some(96.5),
+            ..golden_shape()
+        };
+        assert!(
+            decode(&encode(StallionObject::Shape(too_wide)))
+                .unwrap_err()
+                .contains("width")
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_shape_kind() {
+        let mut unknown = shape_fixture();
+        let at = unknown.windows(5).position(|w| w == b"Arrow").unwrap();
+        unknown[at..at + 5].copy_from_slice(b"Arrox");
         assert!(decode(&unknown).is_err());
     }
 

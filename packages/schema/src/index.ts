@@ -3,5 +3,6 @@ export * from "./colour";
 export * from "./frame";
 export * from "./ink";
 export * from "./model";
+export * from "./shape";
 export * from "./style";
 export * from "./width";

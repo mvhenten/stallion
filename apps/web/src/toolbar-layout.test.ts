@@ -40,7 +40,17 @@ test("the expanded bar adds sizes, colours, the other tools and the palette flip
   const rows = toolbarRows(toolbarLayout("Quick", false, true));
   expect(rows.length).toBeLessThanOrEqual(4);
   expect(rows.flat()).toEqual(
-    expect.arrayContaining(["Sizes", "Colours", "Pan", "Select", "Redo", "Share", "Swap", "Flip"]),
+    expect.arrayContaining([
+      "Sizes",
+      "Colours",
+      "Pan",
+      "Select",
+      "Redo",
+      "Share",
+      "Swap",
+      "Shapes",
+      "Flip",
+    ]),
   );
 });
 
@@ -61,6 +71,7 @@ test("the palette holds every tool and the flip back, on any screen, without a t
           "Sizes",
           "Width",
           "Styles",
+          "Shapes",
           "Colours",
           "CustomColour",
           "RecentColours",

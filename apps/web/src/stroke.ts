@@ -136,7 +136,8 @@ const randomHex = (bytes: number): string =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
 
-const newObjectId = (): string => `${Date.now().toString(36).padStart(9, "0")}${randomHex(6)}`;
+export const newObjectId = (): string =>
+  `${Date.now().toString(36).padStart(9, "0")}${randomHex(6)}`;
 
 export type Draft = {
   objectId: string;

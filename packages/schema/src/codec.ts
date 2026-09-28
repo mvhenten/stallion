@@ -11,7 +11,7 @@ const cbor = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSi
 
 const normalise = (object: StallionObject): StallionObject => {
   const complete = withWidth(withRgb(object));
-  return complete.type === "Stroke" ? withStyle(complete) : complete;
+  return complete.type === "Text" ? complete : withStyle(complete);
 };
 
 const describeErrors = (): string =>

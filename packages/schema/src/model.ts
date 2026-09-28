@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
 import { DEFAULT_STROKE_STYLE, STROKE_STYLES } from "./style";
 import { MAX_WIDTH, MIN_WIDTH } from "./width";
 
@@ -25,6 +26,8 @@ export const pencilSize = z.enum(["Small", "Medium", "Large"]);
 
 export const point = z.tuple([z.number(), z.number(), z.number().min(0).max(1)]);
 
+export const shapePoint = z.tuple([z.number(), z.number()]);
+
 export const stroke = z.strictObject({
   type: z.literal("Stroke"),
   objectId,
@@ -47,7 +50,11 @@ export const shape = z.strictObject({
   rgb: rgb.optional(),
   size: pencilSize,
   width: width.optional(),
-  shape: z.enum(["Rectangle", "Ellipse", "Line"]),
+  style: strokeStyle,
+  kind: z.enum(SHAPE_KINDS),
+  start: shapePoint,
+  end: shapePoint,
+  fill: z.enum(SHAPE_FILLS),
 });
 
 export const text = z.strictObject({
@@ -66,6 +73,7 @@ export const stallionObject = z.discriminatedUnion("type", [stroke, shape, text]
 
 export type Bbox = z.infer<typeof bbox>;
 export type Point = z.infer<typeof point>;
+export type ShapePoint = z.infer<typeof shapePoint>;
 export type PencilSize = z.infer<typeof pencilSize>;
 export type Stroke = z.infer<typeof stroke>;
 export type Shape = z.infer<typeof shape>;
