@@ -1,5 +1,5 @@
 import { type BBox, contains, fromTileLocal, type Point, type Tile } from "@stallion/geometry";
-import type { Stroke } from "@stallion/schema";
+import { type Stroke, widthOf } from "@stallion/schema";
 import { strokeWorldWidth } from "./stroke";
 
 export const ERASER_TOLERANCE_PX = 8;
@@ -26,7 +26,7 @@ const grow = (bbox: BBox, margin: number): BBox => ({
 
 export const hitsStroke = (tile: Tile, stroke: Stroke, world: Point, zoom: number): boolean => {
   const reachPx =
-    ERASER_TOLERANCE_PX + (strokeWorldWidth(stroke.size, stroke.nativeZoom) * zoom) / 2;
+    ERASER_TOLERANCE_PX + (strokeWorldWidth(widthOf(stroke), stroke.nativeZoom) * zoom) / 2;
   if (!contains(grow(stroke.bbox, reachPx / zoom), pointBox(world))) return false;
   const screen = stroke.points.map(([x, y]) => {
     const point = fromTileLocal(tile, { x, y });

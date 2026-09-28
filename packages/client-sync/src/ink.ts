@@ -5,6 +5,7 @@ import {
   type PencilSize,
   type Point,
   withRgb,
+  withWidth,
 } from "@stallion/schema";
 
 export const INK_FIELD = "ink";
@@ -19,6 +20,7 @@ export type InkStroke = {
   colour: number;
   rgb: number;
   size: PencilSize;
+  width: number;
   nativeZoom: number;
 };
 
@@ -109,10 +111,10 @@ export type InkReader = {
   read(states: ReadonlyMap<number, unknown>, self: number): ReadonlyMap<number, LiveInk>;
 };
 
-const frameOf = (state: unknown): (InkFrame & { rgb: number }) | undefined => {
+const frameOf = (state: unknown): (InkFrame & { rgb: number; width: number }) | undefined => {
   if (typeof state !== "object" || state === null) return undefined;
   const parsed = inkFrame.safeParse((state as Record<string, unknown>)[INK_FIELD]);
-  return parsed.success ? withRgb(parsed.data) : undefined;
+  return parsed.success ? withWidth(withRgb(parsed.data)) : undefined;
 };
 
 export function createInkReader(): InkReader {

@@ -59,6 +59,11 @@
             "Large"
           ]
         },
+        "width": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 96
+        },
         "points": {
           "minItems": 1,
           "maxItems": 4096,
@@ -153,6 +158,11 @@
             "Large"
           ]
         },
+        "width": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 96
+        },
         "shape": {
           "type": "string",
           "enum": [
@@ -230,6 +240,11 @@
             "Medium",
             "Large"
           ]
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 96
         },
         "text": {
           "type": "string",

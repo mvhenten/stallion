@@ -56,6 +56,7 @@ test("the palette holds every tool and the flip back, on any screen, without a t
         expect.arrayContaining([
           "Flip",
           "Sizes",
+          "Width",
           "Colours",
           "CustomColour",
           "RecentColours",

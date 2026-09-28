@@ -412,6 +412,99 @@ const smokeCustomColour = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
+const WIDTH_STROKES = [
+  { width: 1, band: 0.35 },
+  { width: 60, band: 0.7 },
+];
+
+const bandPath = (viewport, left, band) => {
+  const cx = left + (viewport.width - left) / 2;
+  const cy = viewport.height * band;
+  return Array.from({ length: 24 }, (_, i) => {
+    const t = i / 23;
+    return { x: cx - 120 + t * 240, y: cy + Math.sin(t * Math.PI * 2) * 40 };
+  });
+};
+
+const smokeWidth = async ({ browser, devices, analyser, url, dir }) => {
+  const context = await browser.newContext({
+    ...devices[DEVICE],
+    colorScheme: "light",
+  });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`width: ${problems[0]}`);
+  };
+  const shot = async (name, clip) => {
+    const path = join(dir, `width-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  const ratios = async (strokes, stage) => {
+    const measured = [];
+    for (const stroke of strokes) {
+      const after = await shot(`${stroke.width}px-${stage}`, stroke.clip);
+      const ink = await inkStats(analyser, stroke.blank.buffer, after.buffer);
+      measured.push(ink.changedRatio);
+    }
+    return measured;
+  };
+  const inOrder = ([thin, thick], stage) => {
+    if (!(thin > 0)) fail(`width: the 1 px stroke did not show ${stage}`);
+    if (!(thick > thin * 4)) {
+      fail(
+        `width: 60 px ink ${thick.toFixed(3)} is not well above 1 px ink ${thin.toFixed(3)} ${stage}`,
+      );
+    }
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail("width: no palette bounding box");
+    const strokes = [];
+    for (const { width, band } of WIDTH_STROKES) {
+      const points = bandPath(viewport, box.x + box.width + CLIP_PAD, band);
+      const clip = clipFor(points);
+      const blank = await shot(`${width}px-before`, clip);
+      strokes.push({ width, points, clip, blank });
+    }
+    for (const stroke of strokes) {
+      await palette.getByRole("button", { name: `${stroke.width} px pencil` }).tap();
+      await drawWithTouch(page, stroke.points);
+      await page.waitForTimeout(500);
+    }
+    await page.waitForTimeout(800);
+    const drawn = await ratios(strokes, "drawn");
+    const full = await shot("drawn-full");
+    inOrder(drawn, "after drawing");
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1000);
+    const reloaded = await ratios(strokes, "reloaded");
+    const reloadedFull = await shot("reloaded-full");
+    inOrder(reloaded, "after reload");
+    check();
+    return {
+      drawn: drawn.map((ratio) => Number(ratio.toFixed(3))),
+      reloaded: reloaded.map((ratio) => Number(ratio.toFixed(3))),
+      screenshots: [full.path, reloadedFull.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -439,6 +532,11 @@ const main = async () => {
     const custom = await smokeCustomColour({ browser, devices, analyser, url: options.url, dir });
     console.log(`PASS custom colour: ${CUSTOM_HEX} kept after reload, match ${custom.match}`);
     for (const path of custom.screenshots) console.log(`  ${path}`);
+    const width = await smokeWidth({ browser, devices, analyser, url: options.url, dir });
+    console.log(
+      `PASS width: 1 px and 60 px ink ${width.drawn.join(" < ")} drawn, ${width.reloaded.join(" < ")} after reload`,
+    );
+    for (const path of width.screenshots) console.log(`  ${path}`);
   } finally {
     await browser.close();
   }

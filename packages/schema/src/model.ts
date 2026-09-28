@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_WIDTH, MIN_WIDTH } from "./width";
 
 export const objectId = z.string().regex(/^[0-9A-Za-z_-]{1,64}$/);
 
@@ -15,6 +16,8 @@ export const colour = z.int().min(0).max(5);
 
 export const rgb = z.int().min(0).max(0xffffff);
 
+export const width = z.number().min(MIN_WIDTH).max(MAX_WIDTH);
+
 export const pencilSize = z.enum(["Small", "Medium", "Large"]);
 
 export const point = z.tuple([z.number(), z.number(), z.number().min(0).max(1)]);
@@ -27,6 +30,7 @@ export const stroke = z.strictObject({
   colour,
   rgb: rgb.optional(),
   size: pencilSize,
+  width: width.optional(),
   points: z.array(point).min(1).max(4096),
 });
 
@@ -38,6 +42,7 @@ export const shape = z.strictObject({
   colour,
   rgb: rgb.optional(),
   size: pencilSize,
+  width: width.optional(),
   shape: z.enum(["Rectangle", "Ellipse", "Line"]),
 });
 
@@ -49,6 +54,7 @@ export const text = z.strictObject({
   colour,
   rgb: rgb.optional(),
   size: pencilSize,
+  width: width.optional(),
   text: z.string().min(1).max(4096),
 });
 

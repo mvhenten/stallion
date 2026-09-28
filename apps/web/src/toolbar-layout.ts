@@ -12,6 +12,7 @@ export type ToolbarMode = "Quick" | "Palette";
 
 export type Control =
   | "Sizes"
+  | "Width"
   | "Colours"
   | "CustomColour"
   | "RecentColours"
@@ -66,6 +67,7 @@ const EXPANDED_ROWS: readonly (readonly Control[])[] = [
 const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Flip", "Connection"],
   ["Sizes"],
+  ["Width"],
   ["Colours"],
   ["CustomColour", "RecentColours"],
   ["Swap", "Pan", "Select", "Eraser"],

@@ -902,3 +902,30 @@ body,
 .toolbar[data-layout="Palette"] .hex-field {
   grid-column: 1 / -1;
 }
+
+.width-preset {
+  color: var(--ink);
+  font:
+    600 13px / 1 system-ui,
+    sans-serif;
+}
+
+.width-slider {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.width-value {
+  color: var(--ink);
+  font:
+    13px / 1 ui-monospace,
+    monospace;
+}
+
+.toolbar[data-layout="Palette"] .width-slider,
+.toolbar[data-layout="Palette"] .width-value {
+  grid-column: 1 / -1;
+}

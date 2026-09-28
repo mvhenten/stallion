@@ -10,12 +10,16 @@ import {
   toTileLocal,
 } from "@stallion/geometry";
 import {
+  MAX_WIDTH,
+  MIN_WIDTH,
   nearestColour,
+  nearestSize,
   PALETTE_RGB,
   type PencilSize,
   rgbHex,
   type Stroke,
   type Point as StrokePoint,
+  widthOf,
 } from "@stallion/schema";
 import getStroke, { type StrokeOptions } from "perfect-freehand";
 
@@ -23,12 +27,28 @@ export const PALETTE: readonly string[] = PALETTE_RGB.map(rgbHex);
 
 export const PENCIL_SIZES: readonly PencilSize[] = ["Small", "Medium", "Large"];
 
-const PENCIL_PX: Record<PencilSize, number> = { Small: 3, Medium: 8, Large: 20 };
+export const WIDTH_PRESETS: readonly number[] = [0.5, 1, 2, 40, 60, 96];
+
+export const WIDTH_SLIDER_STEPS = 100;
+
+const WIDTH_SPAN = Math.log(MAX_WIDTH / MIN_WIDTH);
+
+const roundWidth = (width: number): number =>
+  width < 4 ? Math.round(width * 2) / 2 : Math.round(width);
+
+export const clampWidth = (width: number): number =>
+  Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, roundWidth(width)));
+
+export const sliderToWidth = (step: number): number =>
+  clampWidth(MIN_WIDTH * Math.exp((step / WIDTH_SLIDER_STEPS) * WIDTH_SPAN));
+
+export const widthToSlider = (width: number): number =>
+  Math.round((Math.log(clampWidth(width) / MIN_WIDTH) / WIDTH_SPAN) * WIDTH_SLIDER_STEPS);
 
 export const MAX_POINTS = 4096;
 
-export const strokeWorldWidth = (size: PencilSize, nativeZoom: number): number =>
-  PENCIL_PX[size] * 2 ** (nativeZoom - 0.5);
+export const strokeWorldWidth = (width: number, nativeZoom: number): number =>
+  width * 2 ** (nativeZoom - 0.5);
 
 const strokeOptions = (size: number, last: boolean): StrokeOptions => ({
   size,
@@ -64,15 +84,15 @@ const newObjectId = (): string => `${Date.now().toString(36).padStart(9, "0")}${
 export type Draft = {
   objectId: string;
   rgb: number;
-  size: PencilSize;
+  width: number;
   nativeZoom: number;
   points: StrokePoint[];
 };
 
-export const startDraft = (rgb: number, size: PencilSize, zoom: number): Draft => ({
+export const startDraft = (rgb: number, width: number, zoom: number): Draft => ({
   objectId: newObjectId(),
   rgb,
-  size,
+  width,
   nativeZoom: nativeLevel(zoom),
   points: [],
 });
@@ -83,7 +103,7 @@ export const continueDraft = (draft: Draft): Draft => {
 };
 
 const draftBounds = (draft: Draft): BBox => {
-  const margin = strokeWorldWidth(draft.size, draft.nativeZoom);
+  const margin = strokeWorldWidth(draft.width, draft.nativeZoom);
   const xs = draft.points.map((p) => p[0]);
   const ys = draft.points.map((p) => p[1]);
   return {
@@ -107,7 +127,8 @@ export const finishDraft = (draft: Draft): StoredObject | undefined => {
     bbox,
     colour: nearestColour(draft.rgb),
     rgb: draft.rgb,
-    size: draft.size,
+    size: nearestSize(draft.width),
+    width: draft.width,
     points: draft.points.map(([x, y, pressure]) => {
       const local = toTileLocal(tile, { x, y });
       return [local.x, local.y, pressure];
@@ -125,7 +146,7 @@ export const strokeFrame = (tile: Tile, stroke: Stroke): StrokeFrame => {
   const extent = Math.max(
     bbox.maxX - bbox.minX,
     bbox.maxY - bbox.minY,
-    strokeWorldWidth(stroke.size, stroke.nativeZoom),
+    strokeWorldWidth(widthOf(stroke), stroke.nativeZoom),
   );
   const scale = extent / TILE_SIZE;
   const points = stroke.points.map(([x, y, pressure]): StrokePoint => {
@@ -136,10 +157,14 @@ export const strokeFrame = (tile: Tile, stroke: Stroke): StrokeFrame => {
 };
 
 export const strokeFramePath = (stroke: Stroke, frame: StrokeFrame): Path2D =>
-  outlinePath(frame.points, strokeWorldWidth(stroke.size, stroke.nativeZoom) / frame.scale, true);
+  outlinePath(
+    frame.points,
+    strokeWorldWidth(widthOf(stroke), stroke.nativeZoom) / frame.scale,
+    true,
+  );
 
 export const draftScreenPath = (
-  draft: Pick<Draft, "size" | "nativeZoom" | "points">,
+  draft: Pick<Draft, "width" | "nativeZoom" | "points">,
   toScreen: (world: Point) => Point,
   zoom: number,
 ): Path2D =>
@@ -148,7 +173,7 @@ export const draftScreenPath = (
       const screen = toScreen({ x, y });
       return [screen.x, screen.y, pressure];
     }),
-    strokeWorldWidth(draft.size, draft.nativeZoom) * zoom,
+    strokeWorldWidth(draft.width, draft.nativeZoom) * zoom,
     false,
   );
 

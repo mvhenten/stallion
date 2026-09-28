@@ -27,3 +27,20 @@ test("inkFrame accepts rgb and rejects one out of range", () => {
   expect(inkFrame.safeParse({ ...frame, rgb: 0x123456 }).success).toBe(true);
   expect(inkFrame.safeParse({ ...frame, rgb: 0x1000000 }).success).toBe(false);
 });
+
+test("inkFrame accepts a width from 0.5 to 96 and rejects one outside", () => {
+  const frame = {
+    strokeId: "stroke-1",
+    colour: 0,
+    size: "Small",
+    nativeZoom: 0,
+    from: 0,
+    points: [],
+  };
+  for (const width of [0.5, 1, 60, 96]) {
+    expect(inkFrame.safeParse({ ...frame, width }).success).toBe(true);
+  }
+  for (const width of [0.4, 97, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(inkFrame.safeParse({ ...frame, width }).success).toBe(false);
+  }
+});

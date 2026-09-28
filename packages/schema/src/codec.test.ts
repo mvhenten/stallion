@@ -13,6 +13,7 @@ const stroke: StallionObject = {
   colour: 0,
   rgb: 0x123456,
   size: "Medium",
+  width: 12.5,
   points: [
     [10, 12.5, 0.5],
     [26, 20, 0.75],
@@ -30,6 +31,7 @@ const objects: StallionObject[] = [
     colour: 5,
     rgb: 0x8e4ec6,
     size: "Large",
+    width: 20,
     shape: "Ellipse",
   },
   {
@@ -40,6 +42,7 @@ const objects: StallionObject[] = [
     colour: 0,
     rgb: 0x1f2328,
     size: "Small",
+    width: 3,
     text: "hello",
   },
 ];
@@ -63,17 +66,25 @@ const legacyBytes = (): Uint8Array => {
   return Uint8Array.from(text.trim().match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
 };
 
-test("decodes a legacy stroke without rgb and derives it from the palette", () => {
+test("decodes a legacy stroke without rgb or width and derives both", () => {
   const decoded = decode(legacyBytes());
-  expect(decoded).toMatchObject({ ok: true, value: { colour: 2, rgb: 0xf76b15 } });
+  expect(decoded).toMatchObject({ ok: true, value: { colour: 2, rgb: 0xf76b15, width: 8 } });
   const legacy = raw.decode(legacyBytes()) as Record<string, unknown>;
   expect(legacy.rgb).toBeUndefined();
-  expect(raw.decode(encode(legacy as unknown as StallionObject))).toMatchObject({ rgb: 0xf76b15 });
+  expect(legacy.width).toBeUndefined();
+  expect(raw.decode(encode(legacy as unknown as StallionObject))).toMatchObject({
+    rgb: 0xf76b15,
+    width: 8,
+  });
 });
 
 test.each([
   ["an rgb above 0xFFFFFF", { ...stroke, rgb: 0x1000000 }],
   ["a negative rgb", { ...stroke, rgb: -1 }],
+  ["a width below 0.5", { ...stroke, width: 0.4 }],
+  ["a width above 96", { ...stroke, width: 96.5 }],
+  ["an infinite width", { ...stroke, width: Number.POSITIVE_INFINITY }],
+  ["a NaN width", { ...stroke, width: Number.NaN }],
   ["a colour outside the palette", { ...stroke, colour: 6 }],
   ["a pressure above one", { ...stroke, points: [[0, 0, 1.5]] }],
   ["a zoom level beyond 40", { ...stroke, nativeZoom: 41 }],

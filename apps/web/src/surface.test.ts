@@ -23,7 +23,7 @@ const stored: StoredObject = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-const PENCIL = { size: "Medium", primary: 0, secondary: 4, mode: "Pencil" } as const;
+const PENCIL = { width: 8, primary: 0, secondary: 4, mode: "Pencil" } as const;
 
 const harness = (initial: StoredObject[], awareness?: Awareness) => {
   const calls: string[] = [];

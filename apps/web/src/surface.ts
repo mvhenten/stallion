@@ -11,7 +11,7 @@ import {
   type Tile,
   tileBounds,
 } from "@stallion/geometry";
-import { nearestColour, type PencilSize, rgbHex, rgbOf, type Stroke } from "@stallion/schema";
+import { nearestColour, nearestSize, rgbHex, rgbOf, type Stroke } from "@stallion/schema";
 import { Gesture } from "@use-gesture/vanilla";
 import {
   type Camera,
@@ -54,7 +54,7 @@ import type { DrawingSource } from "./sync";
 
 export type ToolMode = "Pencil" | "Pan" | "Eraser" | "Select";
 
-export type Tool = { size: PencilSize; primary: number; secondary: number; mode: ToolMode };
+export type Tool = { width: number; primary: number; secondary: number; mode: ToolMode };
 
 type Entry = { tile: Tile; stroke: Stroke; frame: StrokeFrame; path: Path2D };
 
@@ -506,8 +506,15 @@ export function createSurface(
   };
 
   const shareDraft = (next: Draft) => {
-    const { objectId, rgb, size, nativeZoom, points } = next;
-    publisher?.start({ strokeId: objectId, colour: nearestColour(rgb), rgb, size, nativeZoom });
+    const { objectId, rgb, width, nativeZoom, points } = next;
+    publisher?.start({
+      strokeId: objectId,
+      colour: nearestColour(rgb),
+      rgb,
+      size: nearestSize(width),
+      width,
+      nativeZoom,
+    });
     publisher?.extend(points);
   };
   const follow = createFollow({
@@ -576,7 +583,7 @@ export function createSurface(
           }
           draft = startDraft(
             effect.secondary ? tool.secondary : tool.primary,
-            tool.size,
+            tool.width,
             camera.zoom,
           );
           shareDraft(draft);

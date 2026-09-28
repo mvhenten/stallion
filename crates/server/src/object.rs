@@ -6,6 +6,7 @@ pub const MAX_OBJECT_ID: usize = 64;
 pub const ZOOM_RANGE: std::ops::RangeInclusive<i32> = -40..=40;
 pub const MAX_COLOUR: u8 = 5;
 pub const MAX_RGB: u32 = 0xFF_FFFF;
+pub const WIDTH_RANGE: std::ops::RangeInclusive<f64> = 0.5..=96.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +47,8 @@ pub struct Stroke {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb: Option<u32>,
     pub size: PencilSize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
     pub points: Vec<Point>,
 }
 
@@ -59,6 +62,8 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb: Option<u32>,
     pub size: PencilSize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
     pub shape: ShapeKind,
 }
 
@@ -72,6 +77,8 @@ pub struct Text {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb: Option<u32>,
     pub size: PencilSize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
     pub text: String,
 }
 
@@ -89,6 +96,7 @@ struct Common<'a> {
     bbox: &'a Bbox,
     colour: u8,
     rgb: Option<u32>,
+    width: Option<f64>,
 }
 
 impl StallionObject {
@@ -108,6 +116,7 @@ impl StallionObject {
                 bbox: &o.bbox,
                 colour: o.colour,
                 rgb: o.rgb,
+                width: o.width,
             },
             StallionObject::Shape(o) => Common {
                 object_id: &o.object_id,
@@ -115,6 +124,7 @@ impl StallionObject {
                 bbox: &o.bbox,
                 colour: o.colour,
                 rgb: o.rgb,
+                width: o.width,
             },
             StallionObject::Text(o) => Common {
                 object_id: &o.object_id,
@@ -122,6 +132,7 @@ impl StallionObject {
                 bbox: &o.bbox,
                 colour: o.colour,
                 rgb: o.rgb,
+                width: o.width,
             },
         }
     }
@@ -148,6 +159,9 @@ impl StallionObject {
         }
         if let Some(rgb) = common.rgb.filter(|&rgb| rgb > MAX_RGB) {
             return Err(format!("rgb {rgb:#x} is outside 0..0xFFFFFF"));
+        }
+        if let Some(width) = common.width.filter(|width| !WIDTH_RANGE.contains(width)) {
+            return Err(format!("width {width} is outside 0.5..96"));
         }
         let b = common.bbox;
         if ![b.min_x, b.min_y, b.max_x, b.max_y]
@@ -219,7 +233,7 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn golden_stroke(colour: u8, rgb: Option<u32>) -> StallionObject {
+    fn golden_stroke(colour: u8, rgb: Option<u32>, width: Option<f64>) -> StallionObject {
         StallionObject::Stroke(Stroke {
             object_id: "stroke-0001".into(),
             native_zoom: -3,
@@ -232,18 +246,22 @@ pub(crate) mod tests {
             colour,
             rgb,
             size: PencilSize::Medium,
+            width,
             points: vec![(10.0, 12.5, 0.5), (26.0, 20.0, 0.75), (42.0, 30.25, 1.0)],
         })
     }
 
     #[test]
     fn decodes_the_golden_stroke_fixture() {
-        assert_eq!(decode(&fixture()), Ok(golden_stroke(0, Some(0x12_3456))));
+        assert_eq!(
+            decode(&fixture()),
+            Ok(golden_stroke(0, Some(0x12_3456), Some(12.5)))
+        );
     }
 
     #[test]
-    fn decodes_the_legacy_stroke_fixture_without_rgb() {
-        assert_eq!(decode(&legacy_fixture()), Ok(golden_stroke(2, None)));
+    fn decodes_the_legacy_stroke_fixture_without_rgb_or_width() {
+        assert_eq!(decode(&legacy_fixture()), Ok(golden_stroke(2, None, None)));
     }
 
     #[test]
@@ -255,6 +273,32 @@ pub(crate) mod tests {
         let mut bytes = Vec::new();
         ciborium::into_writer(&StallionObject::Stroke(stroke), &mut bytes).unwrap();
         assert!(decode(&bytes).unwrap_err().contains("rgb"));
+    }
+
+    #[test]
+    fn rejects_a_width_outside_half_to_96_or_not_finite() {
+        for width in [0.4, 96.5, f64::INFINITY, f64::NAN] {
+            let StallionObject::Stroke(mut stroke) = decode(&fixture()).unwrap() else {
+                unreachable!()
+            };
+            stroke.width = Some(width);
+            let mut bytes = Vec::new();
+            ciborium::into_writer(&StallionObject::Stroke(stroke), &mut bytes).unwrap();
+            assert!(decode(&bytes).unwrap_err().contains("width"), "{width}");
+        }
+    }
+
+    #[test]
+    fn accepts_a_width_at_either_bound() {
+        for width in [0.5, 96.0] {
+            let StallionObject::Stroke(mut stroke) = decode(&fixture()).unwrap() else {
+                unreachable!()
+            };
+            stroke.width = Some(width);
+            let mut bytes = Vec::new();
+            ciborium::into_writer(&StallionObject::Stroke(stroke), &mut bytes).unwrap();
+            assert!(decode(&bytes).is_ok(), "{width}");
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { openBoard } from "@stallion/client-sync";
-import { PALETTE_RGB } from "@stallion/schema";
+import { PALETTE_RGB, PENCIL_PX } from "@stallion/schema";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { boardPath } from "./board-path";
 import { myBoardsForPage, thumbnailUploader } from "./my-boards";
@@ -51,7 +51,7 @@ const SURFACE_CLASS: Record<ToolMode, string> = {
 export function Board({ boardId }: { boardId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>({
-    size: "Medium",
+    width: PENCIL_PX.Medium,
     primary: PALETTE_RGB[0],
     secondary: PALETTE_RGB[4],
     mode: "Pencil",

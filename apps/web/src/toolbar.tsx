@@ -1,10 +1,16 @@
-import { PALETTE_RGB, parseRgbHex, rgbHex } from "@stallion/schema";
+import { PALETTE_RGB, PENCIL_PX, parseRgbHex, rgbHex } from "@stallion/schema";
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { LevelChip } from "./level-chip";
 import type { Presence } from "./presence";
 import { FollowPill, PresenceStrip } from "./presence-strip";
-import { PENCIL_SIZES } from "./stroke";
+import {
+  PENCIL_SIZES,
+  sliderToWidth,
+  WIDTH_PRESETS,
+  WIDTH_SLIDER_STEPS,
+  widthToSlider,
+} from "./stroke";
 import type { SurfaceView, Tool } from "./surface";
 import { CONNECTION_LABEL, type Connection } from "./sync";
 import {
@@ -165,14 +171,50 @@ export function Toolbar({
           <button
             key={size}
             type="button"
-            aria-pressed={tool.mode === "Pencil" && tool.size === size}
+            aria-pressed={tool.mode === "Pencil" && tool.width === PENCIL_PX[size]}
             aria-label={`${size} pencil`}
             class="tool"
-            onClick={() => pick({ ...tool, size, mode: "Pencil" })}
+            onClick={() => pick({ ...tool, width: PENCIL_PX[size], mode: "Pencil" })}
           >
             <span class="dot" style={{ width: DOT_PX[size], height: DOT_PX[size] }} />
           </button>
         ))}
+      </fieldset>
+    ),
+    Width: () => (
+      <fieldset key="Width" class="group width" aria-label="Stroke width">
+        {WIDTH_PRESETS.map((width) => (
+          <button
+            key={width}
+            type="button"
+            aria-pressed={tool.mode === "Pencil" && tool.width === width}
+            aria-label={`${width} px pencil`}
+            class="tool width-preset"
+            onClick={() => pick({ ...tool, width, mode: "Pencil" })}
+          >
+            {width}
+          </button>
+        ))}
+        <input
+          class="width-slider"
+          type="range"
+          min={0}
+          max={WIDTH_SLIDER_STEPS}
+          step={1}
+          aria-label="Stroke width"
+          aria-valuetext={`${tool.width} px`}
+          value={widthToSlider(tool.width)}
+          onInput={(event) =>
+            onChange({
+              ...tool,
+              width: sliderToWidth(Number(event.currentTarget.value)),
+              mode: "Pencil",
+            })
+          }
+        />
+        <output class="width-value" aria-live="polite">
+          {tool.width} px
+        </output>
       </fieldset>
     ),
     Colours: () => (
@@ -255,7 +297,7 @@ export function Toolbar({
         type="button"
         class="tool"
         aria-pressed={tool.mode === "Pencil"}
-        aria-label={`${tool.size} pencil`}
+        aria-label={`Pencil, ${tool.width} px`}
         title="Draw"
         onClick={() => pick({ ...tool, mode: "Pencil" })}
       >
