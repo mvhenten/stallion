@@ -9,10 +9,17 @@ import {
   type Tile,
   toTileLocal,
 } from "@stallion/geometry";
-import type { PencilSize, Stroke, Point as StrokePoint } from "@stallion/schema";
+import {
+  nearestColour,
+  PALETTE_RGB,
+  type PencilSize,
+  rgbHex,
+  type Stroke,
+  type Point as StrokePoint,
+} from "@stallion/schema";
 import getStroke, { type StrokeOptions } from "perfect-freehand";
 
-export const PALETTE = ["#1f2328", "#e5484d", "#f76b15", "#30a46c", "#0090ff", "#8e4ec6"] as const;
+export const PALETTE: readonly string[] = PALETTE_RGB.map(rgbHex);
 
 export const PENCIL_SIZES: readonly PencilSize[] = ["Small", "Medium", "Large"];
 
@@ -56,15 +63,15 @@ const newObjectId = (): string => `${Date.now().toString(36).padStart(9, "0")}${
 
 export type Draft = {
   objectId: string;
-  colour: number;
+  rgb: number;
   size: PencilSize;
   nativeZoom: number;
   points: StrokePoint[];
 };
 
-export const startDraft = (colour: number, size: PencilSize, zoom: number): Draft => ({
+export const startDraft = (rgb: number, size: PencilSize, zoom: number): Draft => ({
   objectId: newObjectId(),
-  colour,
+  rgb,
   size,
   nativeZoom: nativeLevel(zoom),
   points: [],
@@ -98,7 +105,8 @@ export const finishDraft = (draft: Draft): StoredObject | undefined => {
     objectId: draft.objectId,
     nativeZoom: draft.nativeZoom,
     bbox,
-    colour: draft.colour,
+    colour: nearestColour(draft.rgb),
+    rgb: draft.rgb,
     size: draft.size,
     points: draft.points.map(([x, y, pressure]) => {
       const local = toTileLocal(tile, { x, y });

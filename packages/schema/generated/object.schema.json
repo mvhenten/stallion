@@ -46,6 +46,11 @@
           "minimum": 0,
           "maximum": 5
         },
+        "rgb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        },
         "size": {
           "type": "string",
           "enum": [
@@ -135,6 +140,11 @@
           "minimum": 0,
           "maximum": 5
         },
+        "rgb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        },
         "size": {
           "type": "string",
           "enum": [
@@ -207,6 +217,11 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 5
+        },
+        "rgb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
         },
         "size": {
           "type": "string",

@@ -43,7 +43,7 @@ test("the throttle publishes about 30 updates a second and the last one complete
   const reader = createInkReader();
   const remote = () => reader.read(new Map([[7, states.at(-1)]]), 1).get(7);
 
-  publisher.start({ strokeId: "stroke-1", colour: 4, size: "Large", nativeZoom: 0 });
+  publisher.start({ strokeId: "stroke-1", colour: 4, rgb: 0x0090ff, size: "Large", nativeZoom: 0 });
   const points: Point[] = [];
   const durationMs = 3 * INK_FULL_RESEND_MS;
   for (let ms = 0; ms < durationMs; ms++) {

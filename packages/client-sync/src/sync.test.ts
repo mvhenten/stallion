@@ -40,6 +40,7 @@ const stroke = (objectId: string, bbox: BBox = { minX: 10, minY: 10, maxX: 200, 
     nativeZoom: 0,
     bbox,
     colour: 0,
+    rgb: 0x1f2328,
     size: "Small",
     points: [[1, 1, 0.5]],
   };

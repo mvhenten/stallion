@@ -4,11 +4,17 @@ export const EXPANDED_KEY = "stallion:toolbar-expanded";
 
 export const MODE_KEY = "stallion:toolbar-mode";
 
+export const RECENT_COLOURS_KEY = "stallion:recent-colours";
+
+export const MAX_RECENT_COLOURS = 8;
+
 export type ToolbarMode = "Quick" | "Palette";
 
 export type Control =
   | "Sizes"
   | "Colours"
+  | "CustomColour"
+  | "RecentColours"
   | "CurrentColour"
   | "Pencil"
   | "Pan"
@@ -61,6 +67,7 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Flip", "Connection"],
   ["Sizes"],
   ["Colours"],
+  ["CustomColour", "RecentColours"],
   ["Swap", "Pan", "Select", "Eraser"],
   ["Undo", "Redo"],
   ["Level", "Share"],
@@ -115,6 +122,29 @@ export const loadMode = (store: () => Store): ToolbarMode => {
 export const saveMode = (store: () => Store, mode: ToolbarMode): void => {
   try {
     store().setItem(MODE_KEY, mode);
+  } catch {
+    return;
+  }
+};
+
+const isRgb = (value: unknown): value is number =>
+  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 0xffffff;
+
+export const loadRecentColours = (store: () => Store): number[] => {
+  try {
+    const parsed: unknown = JSON.parse(store().getItem(RECENT_COLOURS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter(isRgb).slice(0, MAX_RECENT_COLOURS) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const withRecentColour = (recents: readonly number[], rgb: number): number[] =>
+  [rgb, ...recents.filter((entry) => entry !== rgb)].slice(0, MAX_RECENT_COLOURS);
+
+export const saveRecentColours = (store: () => Store, recents: readonly number[]): void => {
+  try {
+    store().setItem(RECENT_COLOURS_KEY, JSON.stringify(recents));
   } catch {
     return;
   }

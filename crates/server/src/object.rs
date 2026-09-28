@@ -5,6 +5,7 @@ pub const MAX_TEXT: usize = 4096;
 pub const MAX_OBJECT_ID: usize = 64;
 pub const ZOOM_RANGE: std::ops::RangeInclusive<i32> = -40..=40;
 pub const MAX_COLOUR: u8 = 5;
+pub const MAX_RGB: u32 = 0xFF_FFFF;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +43,8 @@ pub struct Stroke {
     pub native_zoom: i32,
     pub bbox: Bbox,
     pub colour: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<u32>,
     pub size: PencilSize,
     pub points: Vec<Point>,
 }
@@ -53,6 +56,8 @@ pub struct Shape {
     pub native_zoom: i32,
     pub bbox: Bbox,
     pub colour: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<u32>,
     pub size: PencilSize,
     pub shape: ShapeKind,
 }
@@ -64,6 +69,8 @@ pub struct Text {
     pub native_zoom: i32,
     pub bbox: Bbox,
     pub colour: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb: Option<u32>,
     pub size: PencilSize,
     pub text: String,
 }
@@ -81,6 +88,7 @@ struct Common<'a> {
     native_zoom: i32,
     bbox: &'a Bbox,
     colour: u8,
+    rgb: Option<u32>,
 }
 
 impl StallionObject {
@@ -99,18 +107,21 @@ impl StallionObject {
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
                 colour: o.colour,
+                rgb: o.rgb,
             },
             StallionObject::Shape(o) => Common {
                 object_id: &o.object_id,
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
                 colour: o.colour,
+                rgb: o.rgb,
             },
             StallionObject::Text(o) => Common {
                 object_id: &o.object_id,
                 native_zoom: o.native_zoom,
                 bbox: &o.bbox,
                 colour: o.colour,
+                rgb: o.rgb,
             },
         }
     }
@@ -134,6 +145,9 @@ impl StallionObject {
         }
         if common.colour > MAX_COLOUR {
             return Err(format!("colour {} is outside 0..5", common.colour));
+        }
+        if let Some(rgb) = common.rgb.filter(|&rgb| rgb > MAX_RGB) {
+            return Err(format!("rgb {rgb:#x} is outside 0..0xFFFFFF"));
         }
         let b = common.bbox;
         if ![b.min_x, b.min_y, b.max_x, b.max_y]
@@ -186,16 +200,27 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn fixture() -> Vec<u8> {
-        let hex = include_str!("../../../packages/schema/fixtures/stroke.cbor.hex").trim();
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/stroke.cbor.hex"
+        ))
+    }
+
+    fn legacy_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/stroke-legacy.cbor.hex"
+        ))
+    }
+
+    fn from_hex(text: &str) -> Vec<u8> {
+        let hex = text.trim();
         (0..hex.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
             .collect()
     }
 
-    #[test]
-    fn decodes_the_golden_stroke_fixture() {
-        let expected = StallionObject::Stroke(Stroke {
+    fn golden_stroke(colour: u8, rgb: Option<u32>) -> StallionObject {
+        StallionObject::Stroke(Stroke {
             object_id: "stroke-0001".into(),
             native_zoom: -3,
             bbox: Bbox {
@@ -204,11 +229,32 @@ pub(crate) mod tests {
                 max_x: 42.0,
                 max_y: 30.25,
             },
-            colour: 2,
+            colour,
+            rgb,
             size: PencilSize::Medium,
             points: vec![(10.0, 12.5, 0.5), (26.0, 20.0, 0.75), (42.0, 30.25, 1.0)],
-        });
-        assert_eq!(decode(&fixture()), Ok(expected));
+        })
+    }
+
+    #[test]
+    fn decodes_the_golden_stroke_fixture() {
+        assert_eq!(decode(&fixture()), Ok(golden_stroke(0, Some(0x12_3456))));
+    }
+
+    #[test]
+    fn decodes_the_legacy_stroke_fixture_without_rgb() {
+        assert_eq!(decode(&legacy_fixture()), Ok(golden_stroke(2, None)));
+    }
+
+    #[test]
+    fn rejects_an_rgb_above_0xffffff() {
+        let StallionObject::Stroke(mut stroke) = decode(&fixture()).unwrap() else {
+            unreachable!()
+        };
+        stroke.rgb = Some(MAX_RGB + 1);
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&StallionObject::Stroke(stroke), &mut bytes).unwrap();
+        assert!(decode(&bytes).unwrap_err().contains("rgb"));
     }
 
     #[test]

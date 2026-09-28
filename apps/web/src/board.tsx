@@ -1,4 +1,5 @@
 import { openBoard } from "@stallion/client-sync";
+import { PALETTE_RGB } from "@stallion/schema";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { boardPath } from "./board-path";
 import { myBoardsForPage, thumbnailUploader } from "./my-boards";
@@ -51,8 +52,8 @@ export function Board({ boardId }: { boardId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [tool, setTool] = useState<Tool>({
     size: "Medium",
-    primary: 0,
-    secondary: 4,
+    primary: PALETTE_RGB[0],
+    secondary: PALETTE_RGB[4],
     mode: "Pencil",
   });
   const [error, setError] = useState<string | undefined>(undefined);

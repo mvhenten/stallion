@@ -156,6 +156,28 @@ const inkStats = (analyser, before, after) =>
     [before.toString("base64"), after.toString("base64")],
   );
 
+const colourRatio = (analyser, png, rgb) =>
+  analyser.evaluate(
+    async ([b64, target]) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0);
+      const data = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      let matching = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const distance =
+          Math.abs(data[i] - target[0]) +
+          Math.abs(data[i + 1] - target[1]) +
+          Math.abs(data[i + 2] - target[2]);
+        if (distance <= 12) matching++;
+      }
+      return matching / (data.length / 4);
+    },
+    [png.toString("base64"), rgb],
+  );
+
 const watchPage = (page, url) => {
   const problems = [];
   const origin = new URL(url).origin;
@@ -323,6 +345,73 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
+const CUSTOM_HEX = "#123456";
+const CUSTOM_RGB = [0x12, 0x34, 0x56];
+
+const smokeCustomColour = async ({ browser, devices, analyser, url, dir }) => {
+  const context = await browser.newContext({
+    ...devices[DEVICE],
+    colorScheme: "light",
+  });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`custom colour: ${problems[0]}`);
+  };
+  const shot = async (name, clip) => {
+    const path = join(dir, `custom-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await palette.getByRole("button", { name: "Large pencil" }).tap();
+    const hex = palette.getByRole("textbox", { name: "Hex colour" });
+    await hex.fill(CUSTOM_HEX);
+    await hex.press("Enter");
+    await palette
+      .getByRole("button", { name: `Recent colour ${CUSTOM_HEX}` })
+      .waitFor({ state: "visible", timeout: 5000 });
+    const picked = await shot("picked");
+    check();
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail("custom colour: no palette bounding box");
+    const points = strokePath(viewport, box.x + box.width + CLIP_PAD);
+    const clip = clipFor(points);
+    await drawWithTouch(page, points);
+    await page.waitForTimeout(800);
+    const drawn = await shot("drawn", clip);
+    if ((await colourRatio(analyser, drawn.buffer, CUSTOM_RGB)) < MIN_INK_RATIO) {
+      fail(`custom colour: the stroke is not drawn in ${CUSTOM_HEX}`);
+    }
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1000);
+    const reloaded = await shot("reloaded", clip);
+    const kept = await colourRatio(analyser, reloaded.buffer, CUSTOM_RGB);
+    if (kept < MIN_INK_RATIO) fail(`custom colour: ${CUSTOM_HEX} gone after reload`);
+    if (!(await page.getByRole("button", { name: `Recent colour ${CUSTOM_HEX}` }).isVisible())) {
+      fail("custom colour: the recent colour is gone after reload");
+    }
+    check();
+    return {
+      match: Number(kept.toFixed(3)),
+      screenshots: [picked.path, drawn.path, reloaded.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -347,6 +436,9 @@ const main = async () => {
     const palette = await smokePalette({ browser, devices, analyser, url: options.url, dir });
     console.log(`PASS palette: flip kept after reload, ink ${palette.ink}`);
     for (const path of palette.screenshots) console.log(`  ${path}`);
+    const custom = await smokeCustomColour({ browser, devices, analyser, url: options.url, dir });
+    console.log(`PASS custom colour: ${CUSTOM_HEX} kept after reload, match ${custom.match}`);
+    for (const path of custom.screenshots) console.log(`  ${path}`);
   } finally {
     await browser.close();
   }

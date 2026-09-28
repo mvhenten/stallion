@@ -11,7 +11,7 @@ import {
   type Tile,
   tileBounds,
 } from "@stallion/geometry";
-import type { PencilSize, Stroke } from "@stallion/schema";
+import { nearestColour, type PencilSize, rgbHex, rgbOf, type Stroke } from "@stallion/schema";
 import { Gesture } from "@use-gesture/vanilla";
 import {
   type Camera,
@@ -44,7 +44,6 @@ import {
   draftScreenPath,
   finishDraft,
   MAX_POINTS,
-  PALETTE,
   type StrokeFrame,
   startDraft,
   strokeFrame,
@@ -200,7 +199,7 @@ export function createSurface(
       const culled = dragged ? "Draw" : cull(entry.stroke.bbox, view, camera.zoom);
       if (culled === "Skip") continue;
       if (culled === "Marker") {
-        const style = PALETTE[entry.stroke.colour] ?? PALETTE[0];
+        const style = rgbHex(rgbOf(entry.stroke));
         markers.push({ ...toDevice(bboxCentre(entry.stroke.bbox)), style });
         continue;
       }
@@ -215,7 +214,7 @@ export function createSurface(
         (origin.x + offset.dx - camera.x) * camera.zoom * dpr,
         (origin.y + offset.dy - camera.y) * camera.zoom * dpr,
       );
-      ctx.fillStyle = PALETTE[entry.stroke.colour] ?? PALETTE[0];
+      ctx.fillStyle = rgbHex(rgbOf(entry.stroke));
       ctx.fill(entry.path);
     }
     renderMarkers(
@@ -228,7 +227,7 @@ export function createSurface(
     if (inks.length > 0) renderInks(dpr);
     if (draft && draft.points.length > 0) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = PALETTE[draft.colour] ?? PALETTE[0];
+      ctx.fillStyle = rgbHex(draft.rgb);
       ctx.fill(draftScreenPath(draft, (world) => worldToScreen(camera, world), camera.zoom));
     }
     renderSelection(dpr);
@@ -250,7 +249,7 @@ export function createSurface(
     ctx.globalAlpha = INK_ALPHA;
     for (const ink of inks) {
       if (ink.points.length === 0) continue;
-      ctx.fillStyle = PALETTE[ink.colour] ?? PALETTE[0];
+      ctx.fillStyle = rgbHex(ink.rgb);
       ctx.fill(draftScreenPath(ink, (world) => worldToScreen(camera, world), camera.zoom));
     }
     ctx.globalAlpha = 1;
@@ -507,8 +506,8 @@ export function createSurface(
   };
 
   const shareDraft = (next: Draft) => {
-    const { objectId, colour, size, nativeZoom, points } = next;
-    publisher?.start({ strokeId: objectId, colour, size, nativeZoom });
+    const { objectId, rgb, size, nativeZoom, points } = next;
+    publisher?.start({ strokeId: objectId, colour: nearestColour(rgb), rgb, size, nativeZoom });
     publisher?.extend(points);
   };
   const follow = createFollow({

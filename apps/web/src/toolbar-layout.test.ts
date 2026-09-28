@@ -2,11 +2,15 @@ import { expect, test } from "vitest";
 import {
   expandedAfterPick,
   loadMode,
+  loadRecentColours,
   MODE_KEY,
   placePopover,
+  RECENT_COLOURS_KEY,
   saveMode,
+  saveRecentColours,
   toolbarLayout,
   toolbarRows,
+  withRecentColour,
 } from "./toolbar-layout";
 
 const memoryStore = () => {
@@ -53,6 +57,8 @@ test("the palette holds every tool and the flip back, on any screen, without a t
           "Flip",
           "Sizes",
           "Colours",
+          "CustomColour",
+          "RecentColours",
           "Swap",
           "Pan",
           "Select",
@@ -104,4 +110,17 @@ test("a popover flips above its anchor when there is no room below", () => {
     side: "Above",
     maxHeight: 274,
   });
+});
+
+test("recent colours keep the last 8 distinct picks, newest first, and survive blocked storage", () => {
+  const store = memoryStore();
+  let recents: number[] = [];
+  for (const rgb of [1, 2, 3, 4, 5, 6, 7, 8, 9, 3]) recents = withRecentColour(recents, rgb);
+  expect(recents).toEqual([3, 9, 8, 7, 6, 5, 4, 2]);
+  saveRecentColours(() => store, recents);
+  expect(loadRecentColours(() => store)).toEqual(recents);
+  store.setItem(RECENT_COLOURS_KEY, '[1, -1, 16777216, "x", 2]');
+  expect(loadRecentColours(() => store)).toEqual([1, 2]);
+  expect(loadRecentColours(broken)).toEqual([]);
+  expect(() => saveRecentColours(broken, recents)).not.toThrow();
 });

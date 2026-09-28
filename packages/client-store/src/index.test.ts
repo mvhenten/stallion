@@ -11,6 +11,7 @@ const stroke = (objectId: string): Stroke => ({
   nativeZoom: 0,
   bbox: { minX: 0, minY: 0, maxX: 10, maxY: 10 },
   colour: 0,
+  rgb: 0x1f2328,
   size: "Medium",
   points: [[1, 1, 0.5]],
 });

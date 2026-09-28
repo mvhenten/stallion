@@ -4,6 +4,7 @@ import {
   MAX_INK_POINTS,
   type PencilSize,
   type Point,
+  withRgb,
 } from "@stallion/schema";
 
 export const INK_FIELD = "ink";
@@ -13,7 +14,13 @@ export const INK_MAX_BYTES = 4096;
 
 const POINT_BYTES = 48;
 
-export type InkStroke = { strokeId: string; colour: number; size: PencilSize; nativeZoom: number };
+export type InkStroke = {
+  strokeId: string;
+  colour: number;
+  rgb: number;
+  size: PencilSize;
+  nativeZoom: number;
+};
 
 export type LiveInk = InkStroke & { points: Point[] };
 
@@ -102,10 +109,10 @@ export type InkReader = {
   read(states: ReadonlyMap<number, unknown>, self: number): ReadonlyMap<number, LiveInk>;
 };
 
-const frameOf = (state: unknown): InkFrame | undefined => {
+const frameOf = (state: unknown): (InkFrame & { rgb: number }) | undefined => {
   if (typeof state !== "object" || state === null) return undefined;
   const parsed = inkFrame.safeParse((state as Record<string, unknown>)[INK_FIELD]);
-  return parsed.success ? parsed.data : undefined;
+  return parsed.success ? withRgb(parsed.data) : undefined;
 };
 
 export function createInkReader(): InkReader {

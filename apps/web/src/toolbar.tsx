@@ -1,9 +1,10 @@
+import { PALETTE_RGB, parseRgbHex, rgbHex } from "@stallion/schema";
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { LevelChip } from "./level-chip";
 import type { Presence } from "./presence";
 import { FollowPill, PresenceStrip } from "./presence-strip";
-import { PALETTE, PENCIL_SIZES } from "./stroke";
+import { PENCIL_SIZES } from "./stroke";
 import type { SurfaceView, Tool } from "./surface";
 import { CONNECTION_LABEL, type Connection } from "./sync";
 import {
@@ -11,12 +12,15 @@ import {
   expandedAfterPick,
   loadExpanded,
   loadMode,
+  loadRecentColours,
   saveExpanded,
   saveMode,
+  saveRecentColours,
   type ToolbarMode,
   toolbarLayout,
   toolbarRows,
   WIDE_QUERY,
+  withRecentColour,
 } from "./toolbar-layout";
 
 const DOT_PX = { Small: 4, Medium: 9, Large: 16 } as const;
@@ -39,6 +43,46 @@ type ToolbarProps = {
 };
 
 const storage = () => localStorage;
+
+const colourLabel = (rgb: number): string => {
+  const index = PALETTE_RGB.indexOf(rgb as (typeof PALETTE_RGB)[number]);
+  return index >= 0 ? `Colour ${index + 1}` : `Colour ${rgbHex(rgb)}`;
+};
+
+function HexField({ rgb, onPick }: { rgb: number; onPick: (rgb: number) => void }) {
+  const [text, setText] = useState(() => rgbHex(rgb));
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => {
+    setText(rgbHex(rgb));
+    setInvalid(false);
+  }, [rgb]);
+  const commit = () => {
+    const parsed = parseRgbHex(text);
+    setInvalid(parsed === undefined);
+    if (parsed !== undefined) onPick(parsed);
+  };
+  return (
+    <input
+      class="hex-field"
+      type="text"
+      inputMode="text"
+      spellcheck={false}
+      autocomplete="off"
+      maxLength={7}
+      aria-label="Hex colour"
+      aria-invalid={invalid}
+      title={
+        invalid ? "Enter a colour as #rrggbb, for example #123456" : "Type a colour as #rrggbb"
+      }
+      value={text}
+      onInput={(event) => setText(event.currentTarget.value)}
+      onChange={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") commit();
+      }}
+    />
+  );
+}
 
 const matchesWide = (): boolean => window.matchMedia(WIDE_QUERY).matches;
 
@@ -86,6 +130,7 @@ export function Toolbar({
   const wide = useWide();
   const [expanded, setExpanded] = useState(() => loadExpanded(storage));
   const [mode, setMode] = useState<ToolbarMode>(() => loadMode(storage));
+  const [recentColours, setRecentColours] = useState(() => loadRecentColours(storage));
   const layout = toolbarLayout(mode, wide, expanded);
   const palette = layout === "Palette";
 
@@ -103,6 +148,12 @@ export function Toolbar({
     if (palette) return;
     const after = expandedAfterPick(wide, expanded);
     if (after !== expanded) expand(after);
+  };
+  const pickCustom = (rgb: number, slot: "primary" | "secondary" = "primary") => {
+    const next = withRecentColour(recentColours, rgb);
+    setRecentColours(next);
+    saveRecentColours(storage, next);
+    pick({ ...tool, [slot]: rgb, mode: "Pencil" });
   };
   const toggleMode = (mode: Tool["mode"]) =>
     pick({ ...tool, mode: tool.mode === mode ? "Pencil" : mode });
@@ -126,35 +177,76 @@ export function Toolbar({
     ),
     Colours: () => (
       <fieldset key="Colours" class="group" aria-label="Colour">
-        {PALETTE.map((colour, index) => (
+        {PALETTE_RGB.map((rgb, index) => (
           <button
-            key={colour}
+            key={rgb}
             type="button"
-            aria-pressed={tool.primary === index}
+            aria-pressed={tool.primary === rgb}
             aria-label={`Colour ${index + 1}`}
             title="Tap for primary, right-click or long-press for secondary"
-            class={tool.secondary === index ? "tool swatch secondary" : "tool swatch"}
-            onClick={() => pick({ ...tool, primary: index })}
+            class={tool.secondary === rgb ? "tool swatch secondary" : "tool swatch"}
+            onClick={() => pick({ ...tool, primary: rgb })}
             onContextMenu={(event) => {
               event.preventDefault();
-              pick({ ...tool, secondary: index });
+              pick({ ...tool, secondary: rgb });
             }}
           >
-            <span class="swatch-fill" style={{ background: colour }} />
+            <span class="swatch-fill" style={{ background: rgbHex(rgb) }} />
           </button>
         ))}
       </fieldset>
     ),
+    CustomColour: () => (
+      <fieldset key="CustomColour" class="group custom-colour" aria-label="Custom colour">
+        <label class="tool swatch picker" title="Pick any colour">
+          <span class="swatch-fill" />
+          <input
+            type="color"
+            aria-label="Pick a colour"
+            value={rgbHex(tool.primary)}
+            onChange={(event) => {
+              const rgb = parseRgbHex(event.currentTarget.value);
+              if (rgb !== undefined) pickCustom(rgb);
+            }}
+          />
+        </label>
+        <HexField rgb={tool.primary} onPick={(rgb) => pickCustom(rgb)} />
+      </fieldset>
+    ),
+    RecentColours: () =>
+      recentColours.length === 0 ? (
+        <span key="RecentColours" hidden />
+      ) : (
+        <fieldset key="RecentColours" class="group" aria-label="Recent colours">
+          {recentColours.map((rgb) => (
+            <button
+              key={rgb}
+              type="button"
+              aria-pressed={tool.primary === rgb}
+              aria-label={`Recent colour ${rgbHex(rgb)}`}
+              title="Tap for primary, right-click or long-press for secondary"
+              class={tool.secondary === rgb ? "tool swatch secondary" : "tool swatch"}
+              onClick={() => pickCustom(rgb)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                pickCustom(rgb, "secondary");
+              }}
+            >
+              <span class="swatch-fill" style={{ background: rgbHex(rgb) }} />
+            </button>
+          ))}
+        </fieldset>
+      ),
     CurrentColour: () => (
       <button
         key="CurrentColour"
         type="button"
         class="tool swatch current"
-        aria-label={`Colour ${tool.primary + 1}, show colours`}
+        aria-label={`${colourLabel(tool.primary)}, show colours`}
         title="Show sizes and colours"
         onClick={() => expand(!expanded)}
       >
-        <span class="swatch-fill" style={{ background: PALETTE[tool.primary] }} />
+        <span class="swatch-fill" style={{ background: rgbHex(tool.primary) }} />
       </button>
     ),
     Pencil: () => (
@@ -217,8 +309,8 @@ export function Toolbar({
         aria-label="Swap primary and secondary colour"
         onClick={() => pick({ ...tool, primary: tool.secondary, secondary: tool.primary })}
       >
-        <span class="chip back" style={{ background: PALETTE[tool.secondary] }} />
-        <span class="chip front" style={{ background: PALETTE[tool.primary] }} />
+        <span class="chip back" style={{ background: rgbHex(tool.secondary) }} />
+        <span class="chip front" style={{ background: rgbHex(tool.primary) }} />
       </button>
     ),
     Undo: () => (

@@ -10,6 +10,7 @@ const stroke: Stroke = {
   nativeZoom: 0,
   bbox: { minX: 10, minY: 10, maxX: 110, maxY: 10 },
   colour: 0,
+  rgb: 0x1f2328,
   size: "Small",
   points: [
     [10, 10, 0.5],

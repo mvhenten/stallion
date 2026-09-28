@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Encoder } from "cbor-x";
 import { expect, test } from "vitest";
 import { decode, encode } from "./codec";
@@ -9,7 +10,8 @@ const stroke: StallionObject = {
   objectId: "stroke-0001",
   nativeZoom: -3,
   bbox: { minX: 10, minY: 12.5, maxX: 42, maxY: 30.25 },
-  colour: 2,
+  colour: 0,
+  rgb: 0x123456,
   size: "Medium",
   points: [
     [10, 12.5, 0.5],
@@ -26,6 +28,7 @@ const objects: StallionObject[] = [
     nativeZoom: 0,
     bbox: { minX: 0, minY: 0, maxX: 256, maxY: 128 },
     colour: 5,
+    rgb: 0x8e4ec6,
     size: "Large",
     shape: "Ellipse",
   },
@@ -35,6 +38,7 @@ const objects: StallionObject[] = [
     nativeZoom: 40,
     bbox: { minX: 1, minY: 2, maxX: 3, maxY: 4 },
     colour: 0,
+    rgb: 0x1f2328,
     size: "Small",
     text: "hello",
   },
@@ -54,7 +58,22 @@ test("matches the golden stroke fixture", async () => {
   await expect(hex(encode(stroke))).toMatchFileSnapshot("../fixtures/stroke.cbor.hex");
 });
 
+const legacyBytes = (): Uint8Array => {
+  const text = readFileSync(new URL("../fixtures/stroke-legacy.cbor.hex", import.meta.url), "utf8");
+  return Uint8Array.from(text.trim().match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+};
+
+test("decodes a legacy stroke without rgb and derives it from the palette", () => {
+  const decoded = decode(legacyBytes());
+  expect(decoded).toMatchObject({ ok: true, value: { colour: 2, rgb: 0xf76b15 } });
+  const legacy = raw.decode(legacyBytes()) as Record<string, unknown>;
+  expect(legacy.rgb).toBeUndefined();
+  expect(raw.decode(encode(legacy as unknown as StallionObject))).toMatchObject({ rgb: 0xf76b15 });
+});
+
 test.each([
+  ["an rgb above 0xFFFFFF", { ...stroke, rgb: 0x1000000 }],
+  ["a negative rgb", { ...stroke, rgb: -1 }],
   ["a colour outside the palette", { ...stroke, colour: 6 }],
   ["a pressure above one", { ...stroke, points: [[0, 0, 1.5]] }],
   ["a zoom level beyond 40", { ...stroke, nativeZoom: 41 }],

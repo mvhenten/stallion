@@ -12,6 +12,7 @@ const stored: StoredObject = {
     nativeZoom: 0,
     bbox: { minX: 0, minY: 0, maxX: 10, maxY: 10 },
     colour: 0,
+    rgb: 0x1f2328,
     size: "Medium",
     points: [
       [1, 1, 0.5],
@@ -141,7 +142,7 @@ test("a remote stroke in progress gives way to its committed object", () => {
   expect(INK_ALPHA).toBeLessThan(1);
   expect(paint()).toEqual([`fillRect ${PAPER}`, "ink #0090ff"]);
 
-  arrive({ ...stored, object: { ...stored.object, colour: 4 } });
+  arrive({ ...stored, object: { ...stored.object, colour: 4, rgb: 0x0090ff } });
   const calls = paint();
   surface.dispose();
 

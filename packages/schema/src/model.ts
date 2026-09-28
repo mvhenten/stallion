@@ -13,6 +13,8 @@ export const bbox = z.strictObject({
 
 export const colour = z.int().min(0).max(5);
 
+export const rgb = z.int().min(0).max(0xffffff);
+
 export const pencilSize = z.enum(["Small", "Medium", "Large"]);
 
 export const point = z.tuple([z.number(), z.number(), z.number().min(0).max(1)]);
@@ -23,6 +25,7 @@ export const stroke = z.strictObject({
   nativeZoom,
   bbox,
   colour,
+  rgb: rgb.optional(),
   size: pencilSize,
   points: z.array(point).min(1).max(4096),
 });
@@ -33,6 +36,7 @@ export const shape = z.strictObject({
   nativeZoom,
   bbox,
   colour,
+  rgb: rgb.optional(),
   size: pencilSize,
   shape: z.enum(["Rectangle", "Ellipse", "Line"]),
 });
@@ -43,6 +47,7 @@ export const text = z.strictObject({
   nativeZoom,
   bbox,
   colour,
+  rgb: rgb.optional(),
   size: pencilSize,
   text: z.string().min(1).max(4096),
 });

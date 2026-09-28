@@ -1,5 +1,6 @@
 import { Encoder } from "cbor-x";
 import { validate } from "../generated/validate.js";
+import { withRgb } from "./colour";
 import type { StallionObject } from "./model";
 
 export type DecodeResult = { ok: true; value: StallionObject } | { ok: false; error: string };
@@ -13,7 +14,7 @@ export const encode = (object: StallionObject): Uint8Array => {
   if (!validate(object)) {
     throw new TypeError(`Cannot encode an invalid object: ${describeErrors()}`);
   }
-  return cbor.encode(object);
+  return cbor.encode(withRgb(object));
 };
 
 export const decode = (bytes: Uint8Array): DecodeResult => {
@@ -21,5 +22,5 @@ export const decode = (bytes: Uint8Array): DecodeResult => {
   if (!validate(value)) {
     return { ok: false, error: describeErrors() };
   }
-  return { ok: true, value };
+  return { ok: true, value: withRgb(value) };
 };
