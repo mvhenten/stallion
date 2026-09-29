@@ -728,7 +728,9 @@ export function createSurface(
     if (drag) return;
     ctx.fillStyle = PAPER;
     ctx.lineWidth = 1.5;
+    const reach = inflate(screenBounds(), HANDLE_PX);
     for (const { x, y } of selectionCorners(entry)) {
+      if (x < reach.minX || x > reach.maxX || y < reach.minY || y > reach.maxY) continue;
       ctx.fillRect(x - HANDLE_PX / 2, y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
       ctx.strokeRect(x - HANDLE_PX / 2, y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
     }
