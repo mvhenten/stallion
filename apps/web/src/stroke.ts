@@ -24,6 +24,7 @@ import {
   widthOf,
 } from "@stallion/schema";
 import getStroke, { type StrokeOptions } from "perfect-freehand";
+import { clipPolygon, clipPolyline, fillPolygon, inflate, strokeRuns, type Vec } from "./clip";
 
 export const PALETTE: readonly string[] = PALETTE_RGB.map(rgbHex);
 
@@ -65,12 +66,10 @@ export const HIGHLIGHTER_ALPHA = 0.4;
 
 export const UNIFORM_PRESSURE = 0.5;
 
-export const outlinePath = (
-  points: readonly StrokePoint[],
-  size: number,
-  last: boolean,
-): Path2D => {
-  const outline = getStroke([...points], strokeOptions(size, last));
+const outlineOf = (points: readonly StrokePoint[], size: number, last: boolean): Vec[] =>
+  getStroke([...points], strokeOptions(size, last)).map(([x, y]): Vec => [x ?? 0, y ?? 0]);
+
+const polygonPath = (outline: readonly Vec[]): Path2D => {
   const path = new Path2D();
   const [first, ...rest] = outline;
   if (!first) return path;
@@ -80,7 +79,10 @@ export const outlinePath = (
   return path;
 };
 
-const centrelinePath = (points: readonly StrokePoint[]): Path2D => {
+export const outlinePath = (points: readonly StrokePoint[], size: number, last: boolean): Path2D =>
+  polygonPath(outlineOf(points, size, last));
+
+const centrelinePath = (points: readonly Vec[]): Path2D => {
   const path = new Path2D();
   const [first, ...rest] = points;
   if (!first) return path;
@@ -90,7 +92,14 @@ const centrelinePath = (points: readonly StrokePoint[]): Path2D => {
   return path;
 };
 
-export type StrokeInk = { style: StrokeStyle; path: Path2D; lineWidth: number };
+export type StrokeInk = {
+  style: StrokeStyle;
+  path: Path2D;
+  lineWidth: number;
+  points: readonly Vec[];
+};
+
+export type InkClip = { scale: number; x: number; y: number; bounds: BBox };
 
 export const strokeInk = (
   style: StrokeStyle,
@@ -98,24 +107,54 @@ export const strokeInk = (
   size: number,
   last: boolean,
 ): StrokeInk => {
-  if (style === "Dashed") return { style, path: centrelinePath(points), lineWidth: size };
+  if (style === "Dashed") {
+    const centre = points.map(([x, y]): Vec => [x, y]);
+    const [only] = centre;
+    if (centre.length === 1 && only) centre.push(only);
+    return { style, path: centrelinePath(centre), lineWidth: size, points: centre };
+  }
   const pressed =
     style === "Uniform" ? points.map(([x, y]): StrokePoint => [x, y, UNIFORM_PRESSURE]) : points;
-  return { style, path: outlinePath(pressed, size, last), lineWidth: size };
+  const outline = outlineOf(pressed, size, last);
+  return { style, path: polygonPath(outline), lineWidth: size, points: outline };
 };
 
 export const dashPattern = (lineWidth: number): number[] => [lineWidth, lineWidth * 2.5];
+
+const paintClipped = (
+  ctx: CanvasRenderingContext2D,
+  ink: StrokeInk,
+  colour: string,
+  { scale, x, y, bounds }: InkClip,
+): void => {
+  const placed = ink.points.map(([px, py]): Vec => [px * scale + x, py * scale + y]);
+  if (ink.style !== "Dashed") {
+    ctx.fillStyle = colour;
+    fillPolygon(ctx, clipPolygon(placed, inflate(bounds, 1)));
+    return;
+  }
+  const lineWidth = ink.lineWidth * scale;
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  const runs = clipPolyline(placed, false, inflate(bounds, lineWidth / 2 + 1));
+  strokeRuns(ctx, runs, dashPattern(lineWidth));
+};
 
 export const paintInk = (
   ctx: CanvasRenderingContext2D,
   ink: StrokeInk,
   colour: string,
   alpha = 1,
+  clip?: InkClip,
 ): void => {
   const highlighter = ink.style === "Highlighter";
   ctx.globalAlpha = highlighter ? alpha * HIGHLIGHTER_ALPHA : alpha;
   if (highlighter) ctx.globalCompositeOperation = "multiply";
-  if (ink.style === "Dashed") {
+  if (clip) {
+    paintClipped(ctx, ink, colour, clip);
+  } else if (ink.style === "Dashed") {
     ctx.strokeStyle = colour;
     ctx.lineWidth = ink.lineWidth;
     ctx.lineCap = "round";

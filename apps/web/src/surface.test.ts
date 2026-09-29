@@ -76,6 +76,9 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
   const erased: string[] = [];
   let tool = PENCIL;
   const context = {
+    save: () => undefined,
+    restore: () => undefined,
+    clip: () => undefined,
     beginPath: () => undefined,
     rect: () => undefined,
     ellipse: () => undefined,

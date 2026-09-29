@@ -1,6 +1,7 @@
 import type { StoredObject } from "@stallion/client-store";
 import { type BBox, nativeLevel, type Point, place } from "@stallion/geometry";
 import { clampUtf8, rgbHex, type Sticky } from "@stallion/schema";
+import { clipRect } from "./clip";
 import { newObjectId, type Scale, scaleAbout } from "./stroke";
 import {
   clampFont,
@@ -137,14 +138,21 @@ export const paintSticky = (
   rect: ScreenRect,
   zoom: number,
   showText: boolean,
+  bounds: BBox,
 ): void => {
+  const visible = clipRect(
+    { minX: rect.x, minY: rect.y, maxX: rect.x + rect.width, maxY: rect.y + rect.height },
+    bounds,
+  );
+  if (!visible) return;
+  const { minX, minY, maxX, maxY } = visible;
   ctx.fillStyle = rgbHex(sticky.background);
-  ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+  ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
   if (!showText) return;
   const { font, pad } = stickyMetrics(sticky);
   ctx.save();
   ctx.beginPath();
-  ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  ctx.rect(minX, minY, maxX - minX, maxY - minY);
   ctx.clip();
   paintLines(
     ctx,

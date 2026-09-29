@@ -20,6 +20,16 @@ import {
   widthOf,
 } from "@stallion/schema";
 import {
+  clipPolygon,
+  clipPolyline,
+  fillPolygon,
+  flattenEllipse,
+  inflate,
+  type Run,
+  strokeRuns,
+  type Vec,
+} from "./clip";
+import {
   dashPattern,
   HIGHLIGHTER_ALPHA,
   newObjectId,
@@ -188,6 +198,98 @@ export const shapeScreenInk = (
 
 type ArrowHead = { base: Point; wing: Point };
 
+const arrowHead = (ink: ShapeInk): { shaftEnd: Point; head: ArrowHead } | undefined => {
+  const { start, end } = ink;
+  const length = Math.hypot(end.x - start.x, end.y - start.y);
+  if (ink.kind !== "Arrow" || length === 0) return undefined;
+  const head = Math.min(ink.head, length);
+  const ux = (end.x - start.x) / length;
+  const uy = (end.y - start.y) / length;
+  const base = { x: end.x - ux * head, y: end.y - uy * head };
+  return {
+    shaftEnd: { x: base.x + ux * head * 0.2, y: base.y + uy * head * 0.2 },
+    head: { base, wing: { x: -uy * head * ARROW_HEAD_SPREAD, y: ux * head * ARROW_HEAD_SPREAD } },
+  };
+};
+
+const headPoints = (tip: Point, { base, wing }: ArrowHead): Vec[] => [
+  [tip.x, tip.y],
+  [base.x + wing.x, base.y + wing.y],
+  [base.x - wing.x, base.y - wing.y],
+];
+
+const ELLIPSE_TOLERANCE = 0.1;
+
+type ClippedOutline = { fill: Vec[]; runs: Run[]; head: Vec[] };
+
+const clippedOutline = (ink: ShapeInk, bounds: BBox): ClippedOutline => {
+  const { start, end } = ink;
+  const fillBox = inflate(bounds, 1);
+  const strokeBox = inflate(bounds, ink.lineWidth / 2 + 1);
+  if (ink.kind === "Rectangle") {
+    const minX = Math.min(start.x, end.x);
+    const minY = Math.min(start.y, end.y);
+    const maxX = Math.max(start.x, end.x);
+    const maxY = Math.max(start.y, end.y);
+    const corners: Vec[] = [
+      [minX, minY],
+      [maxX, minY],
+      [maxX, maxY],
+      [minX, maxY],
+    ];
+    return {
+      fill: clipPolygon(corners, fillBox),
+      runs: clipPolyline(corners, true, strokeBox),
+      head: [],
+    };
+  }
+  if (ink.kind === "Ellipse") {
+    const { points, lengths } = flattenEllipse(
+      (start.x + end.x) / 2,
+      (start.y + end.y) / 2,
+      Math.abs(end.x - start.x) / 2,
+      Math.abs(end.y - start.y) / 2,
+      strokeBox,
+      ELLIPSE_TOLERANCE,
+    );
+    return {
+      fill: clipPolygon(points, fillBox),
+      runs: clipPolyline(points, true, strokeBox, lengths),
+      head: [],
+    };
+  }
+  const arrow = arrowHead(ink);
+  const shaftEnd = arrow?.shaftEnd ?? end;
+  return {
+    fill: [],
+    runs: clipPolyline(
+      [
+        [start.x, start.y],
+        [shaftEnd.x, shaftEnd.y],
+      ],
+      false,
+      strokeBox,
+    ),
+    head: arrow ? clipPolygon(headPoints(end, arrow.head), fillBox) : [],
+  };
+};
+
+const paintClippedShape = (
+  ctx: CanvasRenderingContext2D,
+  ink: ShapeInk,
+  base: number,
+  bounds: BBox,
+): void => {
+  const { fill, runs, head } = clippedOutline(ink, bounds);
+  if (ink.filled) {
+    ctx.globalAlpha = base * TINT_ALPHA;
+    fillPolygon(ctx, fill);
+  }
+  ctx.globalAlpha = base;
+  strokeRuns(ctx, runs, ink.style === "Dashed" ? dashPattern(ink.lineWidth) : []);
+  fillPolygon(ctx, head);
+};
+
 const outline = (ctx: CanvasRenderingContext2D, ink: ShapeInk): ArrowHead | undefined => {
   const { start, end } = ink;
   ctx.beginPath();
@@ -213,17 +315,10 @@ const outline = (ctx: CanvasRenderingContext2D, ink: ShapeInk): ArrowHead | unde
     return undefined;
   }
   ctx.moveTo(start.x, start.y);
-  const length = Math.hypot(end.x - start.x, end.y - start.y);
-  if (ink.kind === "Line" || length === 0) {
-    ctx.lineTo(end.x, end.y);
-    return undefined;
-  }
-  const head = Math.min(ink.head, length);
-  const ux = (end.x - start.x) / length;
-  const uy = (end.y - start.y) / length;
-  const base = { x: end.x - ux * head, y: end.y - uy * head };
-  ctx.lineTo(base.x + ux * head * 0.2, base.y + uy * head * 0.2);
-  return { base, wing: { x: -uy * head * ARROW_HEAD_SPREAD, y: ux * head * ARROW_HEAD_SPREAD } };
+  const arrow = arrowHead(ink);
+  const shaftEnd = arrow?.shaftEnd ?? end;
+  ctx.lineTo(shaftEnd.x, shaftEnd.y);
+  return arrow?.head;
 };
 
 export const paintShape = (
@@ -231,6 +326,7 @@ export const paintShape = (
   ink: ShapeInk,
   colour: string,
   alpha = 1,
+  bounds?: BBox,
 ): void => {
   const highlighter = ink.style === "Highlighter";
   const base = highlighter ? alpha * HIGHLIGHTER_ALPHA : alpha;
@@ -240,6 +336,12 @@ export const paintShape = (
   ctx.lineWidth = ink.lineWidth;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  if (bounds) {
+    paintClippedShape(ctx, ink, base, bounds);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    return;
+  }
   const arrowHead = outline(ctx, ink);
   if (ink.filled) {
     ctx.globalAlpha = base * TINT_ALPHA;
@@ -249,15 +351,7 @@ export const paintShape = (
   if (ink.style === "Dashed") ctx.setLineDash(dashPattern(ink.lineWidth));
   ctx.stroke();
   ctx.setLineDash([]);
-  if (arrowHead) {
-    const { base: b, wing } = arrowHead;
-    ctx.beginPath();
-    ctx.moveTo(ink.end.x, ink.end.y);
-    ctx.lineTo(b.x + wing.x, b.y + wing.y);
-    ctx.lineTo(b.x - wing.x, b.y - wing.y);
-    ctx.closePath();
-    ctx.fill();
-  }
+  if (arrowHead) fillPolygon(ctx, headPoints(ink.end, arrowHead));
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
 };

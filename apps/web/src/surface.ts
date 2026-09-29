@@ -37,6 +37,7 @@ import {
   zoomAt,
   zoomTo,
 } from "./camera";
+import { clipPolyline, exceeds, inflate, strokeRuns, type Vec } from "./clip";
 import { hitsFrame, hitsShape, hitsStroke } from "./eraser";
 import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
@@ -204,6 +205,8 @@ const HANDLE_PX = 12;
 
 const SELECTION = "#0090ff";
 
+const SELECTION_DASH = [4, 4];
+
 export const HINT_GREY = "#8c8c8c";
 
 const BLOCKED_TOUCH_EVENTS = [
@@ -360,6 +363,19 @@ export function createSurface(
 
   const size = () => ({ width: canvas.clientWidth, height: canvas.clientHeight });
 
+  const screenBounds = (): BBox => ({
+    minX: 0,
+    minY: 0,
+    maxX: canvas.clientWidth,
+    maxY: canvas.clientHeight,
+  });
+
+  const onScreen = (bbox: BBox, { dx, dy }: { dx: number; dy: number }): BBox => {
+    const topLeft = worldToScreen(camera, { x: bbox.minX + dx, y: bbox.minY + dy });
+    const bottomRight = worldToScreen(camera, { x: bbox.maxX + dx, y: bbox.maxY + dy });
+    return { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y };
+  };
+
   const render = () => {
     frame = 0;
     const dpr = window.devicePixelRatio || 1;
@@ -367,6 +383,12 @@ export function createSurface(
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = PAPER;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, canvas.width, canvas.height);
+    ctx.clip();
+    const screen = screenBounds();
+    const device: BBox = { minX: 0, minY: 0, maxX: canvas.width, maxY: canvas.height };
     const view = viewBounds(camera, width, height);
     const toDevice = (world: Point): Point => ({
       x: (world.x - camera.x) * camera.zoom * dpr,
@@ -386,6 +408,7 @@ export function createSurface(
         continue;
       }
       const offset = dragged ?? { dx: 0, dy: 0 };
+      const oversized = exceeds(onScreen(entry.object.bbox, offset), screen);
       if (entry.type === "Sticky") {
         const { bbox } = entry.object;
         const topLeft = worldToScreen(camera, {
@@ -404,6 +427,7 @@ export function createSurface(
           },
           camera.zoom,
           editing?.objectId !== entry.object.objectId,
+          screen,
         );
         continue;
       }
@@ -430,19 +454,21 @@ export function createSurface(
           ctx,
           shapeScreenInk(shapeLook(entry.object), entry.start, entry.end, shift, camera.zoom),
           colour,
+          1,
+          oversized ? screen : undefined,
         );
         continue;
       }
       const { origin } = entry.frame;
       const scale = entry.frame.scale * camera.zoom * dpr;
-      ctx.setTransform(
-        scale,
-        0,
-        0,
-        scale,
-        (origin.x + offset.dx - camera.x) * camera.zoom * dpr,
-        (origin.y + offset.dy - camera.y) * camera.zoom * dpr,
-      );
+      const x = (origin.x + offset.dx - camera.x) * camera.zoom * dpr;
+      const y = (origin.y + offset.dy - camera.y) * camera.zoom * dpr;
+      if (oversized) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        paintInk(ctx, entry.ink, colour, 1, { scale, x, y, bounds: device });
+        continue;
+      }
+      ctx.setTransform(scale, 0, 0, scale, x, y);
       paintInk(ctx, entry.ink, colour);
     }
     renderMarkers(
@@ -477,6 +503,7 @@ export function createSurface(
     }
     renderSelection(dpr);
     if (cursors.length > 0) renderCursors(dpr);
+    ctx.restore();
     reportEdit();
   };
 
@@ -625,6 +652,7 @@ export function createSurface(
         draftScreenInk(ink, (world) => worldToScreen(camera, world), camera.zoom),
         rgbHex(ink.rgb),
         INK_ALPHA,
+        { scale: 1, x: 0, y: 0, bounds: screenBounds() },
       );
     }
   };
@@ -664,12 +692,25 @@ export function createSurface(
     return best?.corner;
   };
 
-  const strokeInk = (ink: BBox) => {
-    const { dx, dy } = drag ?? { dx: 0, dy: 0 };
-    const topLeft = worldToScreen(camera, { x: ink.minX + dx, y: ink.minY + dy });
-    const bottomRight = worldToScreen(camera, { x: ink.maxX + dx, y: ink.maxY + dy });
-    ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+  const strokeBox = (box: BBox, dash: number[]) => {
+    const screen = screenBounds();
+    const { minX, minY, maxX, maxY } = box;
+    if (!exceeds(box, screen)) {
+      ctx.setLineDash(dash);
+      ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+      ctx.setLineDash([]);
+      return;
+    }
+    const corners: Vec[] = [
+      [minX, minY],
+      [maxX, minY],
+      [maxX, maxY],
+      [minX, maxY],
+    ];
+    strokeRuns(ctx, clipPolyline(corners, true, inflate(screen, 2)), dash);
   };
+
+  const strokeInk = (ink: BBox) => strokeBox(onScreen(ink, drag ?? { dx: 0, dy: 0 }), []);
 
   const renderSelection = (dpr: number) => {
     const entry = selectedEntry();
@@ -679,9 +720,10 @@ export function createSurface(
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.strokeStyle = SELECTION;
     ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-    ctx.setLineDash([]);
+    strokeBox(
+      { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y },
+      SELECTION_DASH,
+    );
     if (entry.type === "Text") strokeInk(entry.ink);
     if (drag) return;
     ctx.fillStyle = PAPER;
