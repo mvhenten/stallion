@@ -65,7 +65,9 @@ export const openEditor = (area: HTMLTextAreaElement | null, text: string): void
 
 export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditorProps) {
   const latest = useRef(edit);
+  const panned = useRef({ from: edit?.top, by: 0 });
   latest.current = edit;
+  if (panned.current.from !== edit?.top) panned.current = { from: edit?.top, by: 0 };
 
   const grow = () => {
     const area = areaRef.current;
@@ -88,11 +90,13 @@ export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditor
     const editor = {
       left: current.left,
       right: current.left + current.width,
-      top: current.top,
-      bottom: current.top + height,
+      top: current.top + panned.current.by,
+      bottom: current.top + panned.current.by + height,
     };
-    const shift = revealShift(current.top, height, freeBand(editor, visible, overlayRects()));
-    if (shift !== 0) onPan(0, shift);
+    const shift = revealShift(editor.top, height, freeBand(editor, visible, overlayRects()));
+    if (shift === 0) return;
+    panned.current.by += shift;
+    onPan(0, shift);
   };
 
   useLayoutEffect(grow);
