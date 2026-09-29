@@ -8,6 +8,45 @@ export const KEYBOARD_GAP_PX = 12;
 
 const DONE_ROW_PX = 52;
 
+const OVERLAYS = [".toolbar", ".presence-floater"];
+
+type Band = { top: number; bottom: number };
+
+type Rect = Band & { left: number; right: number };
+
+const covers = (editor: Rect, overlay: Rect): boolean =>
+  overlay.right > overlay.left &&
+  overlay.bottom > overlay.top &&
+  overlay.left < editor.right &&
+  editor.left < overlay.right &&
+  overlay.top < editor.bottom &&
+  editor.top < overlay.bottom;
+
+export const freeBand = (editor: Rect, visible: Band, overlays: readonly Rect[]): Band => {
+  const middle = (visible.top + visible.bottom) / 2;
+  const hit = overlays.filter((overlay) => covers(editor, overlay));
+  const above = hit.filter((overlay) => (overlay.top + overlay.bottom) / 2 < middle);
+  const below = hit.filter((overlay) => (overlay.top + overlay.bottom) / 2 >= middle);
+  return {
+    top: Math.max(visible.top, ...above.map((overlay) => overlay.bottom + KEYBOARD_GAP_PX)),
+    bottom: Math.min(visible.bottom, ...below.map((overlay) => overlay.top - KEYBOARD_GAP_PX)),
+  };
+};
+
+export const revealShift = (top: number, height: number, band: Band): number => {
+  const bottom = top + height;
+  if (top < band.top) return Math.max(0, Math.min(band.top - top, band.bottom - bottom));
+  const overflow = bottom - band.bottom;
+  if (overflow <= 0) return 0;
+  return -Math.min(overflow, Math.max(0, top - band.top));
+};
+
+const overlayRects = (): Rect[] =>
+  OVERLAYS.flatMap((selector) => {
+    const element = document.querySelector(selector);
+    return element ? [element.getBoundingClientRect()] : [];
+  });
+
 type TextEditorProps = {
   edit: TextEdit | undefined;
   areaRef: RefObject<HTMLTextAreaElement>;
@@ -41,13 +80,19 @@ export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditor
     const viewport = window.visualViewport;
     const current = latest.current;
     if (!viewport || !current) return;
-    const visibleTop = viewport.offsetTop + KEYBOARD_GAP_PX;
-    const visibleBottom = viewport.offsetTop + viewport.height - KEYBOARD_GAP_PX;
-    const height = Math.max(current.height, areaRef.current?.scrollHeight ?? 0);
-    const overflow = current.top + height + DONE_ROW_PX - visibleBottom;
-    if (overflow <= 0) return;
-    const room = Math.max(0, current.top - visibleTop);
-    if (room > 0) onPan(0, -Math.min(overflow, room));
+    const height = Math.max(current.height, areaRef.current?.scrollHeight ?? 0) + DONE_ROW_PX;
+    const visible = {
+      top: viewport.offsetTop + KEYBOARD_GAP_PX,
+      bottom: viewport.offsetTop + viewport.height - KEYBOARD_GAP_PX,
+    };
+    const editor = {
+      left: current.left,
+      right: current.left + current.width,
+      top: current.top,
+      bottom: current.top + height,
+    };
+    const shift = revealShift(current.top, height, freeBand(editor, visible, overlayRects()));
+    if (shift !== 0) onPan(0, shift);
   };
 
   useLayoutEffect(grow);

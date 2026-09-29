@@ -992,3 +992,25 @@ body,
     sans-serif;
   box-shadow: 0 2px 8px #0000001f;
 }
+
+@media (max-width: 1279px) {
+  .toolbar[data-layout="Wide"] .toolbar-row {
+    gap: 2px;
+  }
+
+  .toolbar[data-layout="Wide"] .tool {
+    width: 32px;
+    height: 32px;
+  }
+
+  .toolbar[data-layout="Wide"] .swatch-fill {
+    width: 24px;
+    height: 24px;
+  }
+
+  .toolbar[data-layout="Wide"] .level-chip {
+    min-width: 36px;
+    height: 32px;
+    padding: 0 8px;
+  }
+}

@@ -63,6 +63,15 @@ export const wrapWorld = (
   measureAt: (px: number) => Measure,
 ): string[] => wrapText(text, (width / font) * MEASURE_PX, measureAt(MEASURE_PX));
 
+export const widestWorld = (
+  lines: readonly string[],
+  font: number,
+  measureAt: (px: number) => Measure,
+): number => {
+  const measure = measureAt(MEASURE_PX);
+  return Math.max(0, ...lines.map((line) => (measure(line) / MEASURE_PX) * font));
+};
+
 export const worldFont = (object: { width: number; nativeZoom: number }): number =>
   strokeWorldWidth(object.width, object.nativeZoom);
 

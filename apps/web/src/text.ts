@@ -1,5 +1,6 @@
 import type { StoredObject } from "@stallion/client-store";
 import {
+  type BBox,
   nativeLevel,
   type Point,
   place,
@@ -9,7 +10,15 @@ import {
 } from "@stallion/geometry";
 import { clampUtf8, MAX_WRAP_WIDTH, rgbHex, type Text } from "@stallion/schema";
 import { newObjectId, type Scale, scaleAbout } from "./stroke";
-import { fontForScreen, LINE_HEIGHT, type Measure, paintLines, worldFont, wrapWorld } from "./wrap";
+import {
+  fontForScreen,
+  LINE_HEIGHT,
+  type Measure,
+  paintLines,
+  widestWorld,
+  worldFont,
+  wrapWorld,
+} from "./wrap";
 
 export const TEXT_FONT_PX = 24;
 
@@ -20,6 +29,16 @@ export const textWrap = (tile: Tile, text: Text): number =>
 
 export const textLines = (tile: Tile, text: Text, measureAt: (px: number) => Measure): string[] =>
   wrapWorld(text.text, textWrap(tile, text), worldFont(text), measureAt);
+
+export const textInkBox = (
+  text: Text,
+  lines: readonly string[],
+  measureAt: (px: number) => Measure,
+): BBox => {
+  const font = worldFont(text);
+  const { minX, minY, maxY } = text.bbox;
+  return { minX, minY, maxX: minX + Math.max(font, widestWorld(lines, font, measureAt)), maxY };
+};
 
 const placeText = (
   text: Text,

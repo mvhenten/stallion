@@ -48,6 +48,8 @@ const STYLE_TITLE: Record<StrokeStyle, string> = {
   Uniform: "Uniform: ink of even width",
 };
 
+const PEN_NIB = "M2.5 16.5C5.5 7.5 9 7.5 12 11.5s5.5 5 9.5-2c-2 9.5-6 10-9.5 6S6.5 11 2.5 16.5z";
+
 const STYLE_WAVE = "M3 16c3-6 6-6 9-2s6 4 9-2";
 
 const STYLE_STROKE: Record<Exclude<StrokeStyle, "Pen">, JSX.SVGAttributes<SVGPathElement>> = {
@@ -60,7 +62,7 @@ function StyleIcon({ style }: { style: StrokeStyle }) {
   return (
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
       {style === "Pen" ? (
-        <path d="M3 16.5c3-7 6-7 9-2.5s6 3.5 9-2.5c-2 7-6 8-9 4s-6-5-9 1z" fill="currentColor" />
+        <path d={PEN_NIB} fill="currentColor" />
       ) : (
         <path d={STYLE_WAVE} fill="none" stroke="currentColor" {...STYLE_STROKE[style]} />
       )}
@@ -80,15 +82,16 @@ function FillIcon({ on }: { on: boolean }) {
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
       <rect
         x="4"
-        y="5"
+        y="4"
         width="16"
-        height="14"
-        rx="1"
+        height="16"
+        rx="3"
         fill={on ? "currentColor" : "none"}
-        fill-opacity="0.3"
+        fill-opacity="0.35"
         stroke="currentColor"
         stroke-width="2"
       />
+      {!on && <path d="M5 19L19 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" />}
     </svg>
   );
 }

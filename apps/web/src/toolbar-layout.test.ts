@@ -54,11 +54,26 @@ test("the expanded bar adds sizes, colours, the other tools and the palette flip
   );
 });
 
-test("a wide screen shows every tool and the flip on one row without a toggle", () => {
-  const rows = toolbarRows(toolbarLayout("Quick", true, false));
-  expect(rows).toHaveLength(1);
-  expect(rows[0]).not.toContain("Expand");
-  expect(rows[0]).toEqual(expect.arrayContaining(["Sizes", "Colours", "Redo", "Share", "Flip"]));
+test("a wide screen shows every tool, the shapes and the flip on one row without a toggle", () => {
+  expect(toolbarRows(toolbarLayout("Quick", true, false))).toEqual([
+    [
+      "Sizes",
+      "Colours",
+      "Swap",
+      "Pan",
+      "Select",
+      "Shapes",
+      "Sticky",
+      "Text",
+      "Eraser",
+      "Undo",
+      "Redo",
+      "Share",
+      "Level",
+      "Connection",
+      "Flip",
+    ],
+  ]);
 });
 
 test("the palette holds every tool and the flip back, on any screen, without a toggle", () => {

@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { scaleText, startText, textLines, textWrap, withTextContent } from "./text";
+import { hitsFrame } from "./eraser";
+import { scaleText, startText, textInkBox, textLines, textWrap, withTextContent } from "./text";
 import type { Measure } from "./wrap";
 
 const halfEm =
@@ -23,4 +24,19 @@ test("a narrower wrap width re-wraps the text and fits the box to the lines", ()
   expect(object.width).toBe(typed.object.width);
   expect(textLines(tile, object, halfEm)).toEqual(["buy milk and", "eggs today"]);
   expect(object.bbox.maxY - object.bbox.minY).toBeCloseTo(2 * 24 * 1.3, 6);
+});
+
+test("a short word hits only on its rendered line, not across the wrap width", () => {
+  const placed = startText(0xe5484d, 1, { x: 0, y: 0 }, halfEm);
+  if (placed?.object.type !== "Text") throw new Error("no text placed");
+  const typed = withTextContent(placed.tile, placed.object, "hello", halfEm);
+  if (typed?.object.type !== "Text") throw new Error("no text typed");
+  const { object } = typed;
+  const ink = textInkBox(object, textLines(typed.tile, object, halfEm), halfEm);
+  expect(object.bbox.maxX - object.bbox.minX).toBeCloseTo(320, 6);
+  expect(ink.maxX - ink.minX).toBeCloseTo(60, 6);
+  expect(ink.maxY - ink.minY).toBeCloseTo(object.bbox.maxY - object.bbox.minY, 6);
+  const middle = (object.bbox.minY + object.bbox.maxY) / 2;
+  expect(hitsFrame({ bbox: ink }, { x: object.bbox.minX + 30, y: middle }, 1)).toBe(true);
+  expect(hitsFrame({ bbox: ink }, { x: object.bbox.minX + 200, y: middle }, 1)).toBe(false);
 });

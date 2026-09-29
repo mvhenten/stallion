@@ -89,7 +89,15 @@ import {
   translateStroke,
 } from "./stroke";
 import type { DrawingSource } from "./sync";
-import { paintText, scaleText, startText, textLines, translateText, withTextContent } from "./text";
+import {
+  paintText,
+  scaleText,
+  startText,
+  textInkBox,
+  textLines,
+  translateText,
+  withTextContent,
+} from "./text";
 import { LINE_HEIGHT, type Measure, measureText, worldFont } from "./wrap";
 
 export type ToolMode = "Pencil" | "Shape" | "Sticky" | "Text" | "Pan" | "Eraser" | "Select";
@@ -108,13 +116,14 @@ type Entry =
   | { type: "Stroke"; tile: Tile; object: Stroke; frame: StrokeFrame; ink: StrokeInk }
   | { type: "Shape"; tile: Tile; object: Shape; start: Point; end: Point }
   | { type: "Sticky"; tile: Tile; object: Sticky; lines: string[] }
-  | { type: "Text"; tile: Tile; object: Text; lines: string[] };
+  | { type: "Text"; tile: Tile; object: Text; lines: string[]; ink: BBox };
 
 const isWritable = (entry: Entry | undefined): entry is Entry & { object: Sticky | Text } =>
   entry?.type === "Sticky" || entry?.type === "Text";
 
 const hits = (entry: Entry, world: Point, zoom: number): boolean => {
-  if (isWritable(entry)) return hitsFrame(entry.object, world, zoom);
+  if (entry.type === "Text") return hitsFrame({ bbox: entry.ink }, world, zoom);
+  if (entry.type === "Sticky") return hitsFrame(entry.object, world, zoom);
   return entry.type === "Stroke"
     ? hitsStroke(entry.tile, entry.object, world, zoom)
     : hitsShape(entry.tile, entry.object, world, zoom);
@@ -655,6 +664,13 @@ export function createSurface(
     return best?.corner;
   };
 
+  const strokeInk = (ink: BBox) => {
+    const { dx, dy } = drag ?? { dx: 0, dy: 0 };
+    const topLeft = worldToScreen(camera, { x: ink.minX + dx, y: ink.minY + dy });
+    const bottomRight = worldToScreen(camera, { x: ink.maxX + dx, y: ink.maxY + dy });
+    ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+  };
+
   const renderSelection = (dpr: number) => {
     const entry = selectedEntry();
     if (!entry) return;
@@ -666,6 +682,7 @@ export function createSurface(
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
     ctx.setLineDash([]);
+    if (entry.type === "Text") strokeInk(entry.ink);
     if (drag) return;
     ctx.fillStyle = PAPER;
     ctx.lineWidth = 1.5;
@@ -709,7 +726,8 @@ export function createSurface(
       return { type: "Sticky", tile, object, lines: stickyLines(object, measureAt) };
     }
     if (object.type === "Text") {
-      return { type: "Text", tile, object, lines: textLines(tile, object, measureAt) };
+      const lines = textLines(tile, object, measureAt);
+      return { type: "Text", tile, object, lines, ink: textInkBox(object, lines, measureAt) };
     }
     if (object.type === "Shape") {
       return { type: "Shape", tile, object, ...shapeWorldPoints(tile, object) };
