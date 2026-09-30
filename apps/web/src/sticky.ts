@@ -131,6 +131,17 @@ export const scaleSticky = (
 
 export type ScreenRect = { x: number; y: number; width: number; height: number };
 
+export const STICKY_SHADOW_COLOUR = "rgba(0, 0, 0, 0.18)";
+export const STICKY_SHADOW_BLUR_PX = 6;
+export const STICKY_SHADOW_OFFSET_X_PX = 0;
+export const STICKY_SHADOW_OFFSET_Y_PX = 2;
+
+const fitsCanvas = (ctx: CanvasRenderingContext2D, width: number, height: number): boolean => {
+  const { a: scaleX, d: scaleY } = ctx.getTransform();
+  const deviceArea = width * scaleX * (height * scaleY);
+  return deviceArea <= ctx.canvas.width * ctx.canvas.height;
+};
+
 export const paintSticky = (
   ctx: CanvasRenderingContext2D,
   sticky: Sticky,
@@ -139,6 +150,7 @@ export const paintSticky = (
   zoom: number,
   showText: boolean,
   bounds: BBox,
+  oversized: boolean,
 ): void => {
   const visible = clipRect(
     { minX: rect.x, minY: rect.y, maxX: rect.x + rect.width, maxY: rect.y + rect.height },
@@ -146,8 +158,21 @@ export const paintSticky = (
   );
   if (!visible) return;
   const { minX, minY, maxX, maxY } = visible;
+  const shadowed = !oversized && fitsCanvas(ctx, maxX - minX, maxY - minY);
+  if (shadowed) {
+    ctx.shadowColor = STICKY_SHADOW_COLOUR;
+    ctx.shadowBlur = STICKY_SHADOW_BLUR_PX;
+    ctx.shadowOffsetX = STICKY_SHADOW_OFFSET_X_PX;
+    ctx.shadowOffsetY = STICKY_SHADOW_OFFSET_Y_PX;
+  }
   ctx.fillStyle = rgbHex(sticky.background);
   ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+  if (shadowed) {
+    ctx.shadowColor = "rgba(0, 0, 0, 0)";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+  }
   if (!showText) return;
   const { font, pad } = stickyMetrics(sticky);
   ctx.save();

@@ -231,6 +231,7 @@ const paintPreview = (ctx: CanvasRenderingContext2D, entry: Entry, dpr: number):
       view.zoom,
       true,
       bounds,
+      false,
     );
     return;
   }
@@ -506,6 +507,7 @@ export function createSurface(
           camera.zoom,
           editing?.objectId !== entry.object.objectId,
           screen,
+          oversized,
         );
         continue;
       }
