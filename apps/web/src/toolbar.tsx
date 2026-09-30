@@ -9,8 +9,9 @@ import {
   type StrokeStyle,
 } from "@stallion/schema";
 import type { JSX } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { LevelChip } from "./level-chip";
+import { usePaletteFit } from "./palette-fit";
 import type { Presence } from "./presence";
 import { FollowPill, PresenceStrip } from "./presence-strip";
 import {
@@ -204,6 +205,8 @@ export function Toolbar({
   const [recentColours, setRecentColours] = useState(() => loadRecentColours(storage));
   const layout = toolbarLayout(mode, wide, expanded);
   const palette = layout === "Palette";
+  const barRef = useRef<HTMLDivElement>(null);
+  usePaletteFit(barRef, palette);
 
   const expand = (next: boolean) => {
     setExpanded(next);
@@ -599,6 +602,7 @@ export function Toolbar({
   return (
     <>
       <div
+        ref={barRef}
         class="toolbar"
         data-layout={layout}
         role="toolbar"

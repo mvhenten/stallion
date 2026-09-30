@@ -852,30 +852,6 @@ body,
   bottom: 0;
 }
 
-@media (max-height: 1100px) {
-  .toolbar[data-layout="Palette"] {
-    --palette-columns: 3;
-  }
-}
-
-@media (max-height: 900px) {
-  .toolbar[data-layout="Palette"] {
-    --palette-columns: 4;
-  }
-}
-
-@media (max-height: 640px) {
-  .toolbar[data-layout="Palette"] {
-    --palette-columns: 4;
-  }
-}
-
-@media (max-height: 440px) {
-  .toolbar[data-layout="Palette"] {
-    --palette-columns: 6;
-  }
-}
-
 .swatch.picker {
   overflow: hidden;
 }
