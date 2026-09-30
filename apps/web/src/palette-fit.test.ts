@@ -19,10 +19,15 @@ test("stops above a visible notice", () => {
   expect(fitColumns(heightAt, paletteRoom(1000, 12, [880]), 12)).toBe(4);
 });
 
-test("never grows wider than the viewport allows", () => {
-  expect(maxColumns(412)).toBe(7);
-  expect(fitColumns((columns) => 5000 - columns, 100, maxColumns(412))).toBe(7);
+test("leaves most of a phone screen free for drawing", () => {
+  expect(maxColumns(412)).toBe(4);
+  expect(fitColumns((columns) => 5000 - columns, 100, maxColumns(412))).toBe(4);
+  expect(maxColumns(200)).toBe(3);
   expect(maxColumns(100)).toBe(2);
+});
+
+test("lets a desktop palette spread to 40 percent of the width", () => {
+  expect(maxColumns(1440)).toBe(11);
 });
 
 test("stops adding columns once the palette gets no shorter", () => {

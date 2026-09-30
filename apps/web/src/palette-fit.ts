@@ -6,11 +6,19 @@ export const PALETTE_GUTTER = 16;
 export const NOTICE_GAP = 8;
 const COLUMN_PITCH = 48;
 const PALETTE_CHROME = 14;
+const WIDTH_SHARE = 0.4;
+const PHONE_COLUMNS = 4;
+
+const columnsIn = (width: number): number =>
+  Math.floor((width - PALETTE_CHROME + 4) / COLUMN_PITCH);
 
 export const maxColumns = (viewportWidth: number): number =>
   Math.max(
     MIN_COLUMNS,
-    Math.floor((viewportWidth - 2 * PALETTE_GUTTER - PALETTE_CHROME + 4) / COLUMN_PITCH),
+    Math.min(
+      columnsIn(viewportWidth - 2 * PALETTE_GUTTER),
+      Math.max(PHONE_COLUMNS, columnsIn(viewportWidth * WIDTH_SHARE)),
+    ),
   );
 
 export const paletteRoom = (
