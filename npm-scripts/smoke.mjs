@@ -1232,22 +1232,25 @@ const smokeTextStyle = async ({ browser, devices, analyser, url, dir }) => {
       .getAttribute("aria-pressed");
     if (pressed !== "true") fail(`${label}: ${name} is not on ${stage}`);
   };
-  try {
-    await page.goto(url, { waitUntil: "load" });
-    await waitForBoard(page);
+  const pickTextTool = async () => {
     const more = page.getByRole("button", { name: "More tools" });
     if (await more.isVisible()) await more.tap();
     await page.locator("[data-toolbar-flip]").tap();
     const palette = page.locator(PALETTE);
     await palette.waitFor({ state: "visible", timeout: 5000 });
     await page.waitForTimeout(500);
-    await palette.getByRole("button", { name: TEXT_COLOUR, exact: true }).tap();
+    await pickColour(page, TEXT_COLOUR);
     await palette.getByRole("button", { name: "Text tool" }).tap();
     await page.locator("[data-toolbar-flip]").tap();
     await page.locator(PALETTE).waitFor({ state: "hidden", timeout: 5000 });
     const fewer = page.getByRole("button", { name: "Fewer tools" });
     if (await fewer.isVisible()) await fewer.tap();
     await page.waitForTimeout(300);
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    await pickTextTool();
     const viewport = page.viewportSize() ?? fail("no viewport");
     const at = {
       x: Math.round(Math.max(24, viewport.width / 2 - 160)),
@@ -1285,6 +1288,7 @@ const smokeTextStyle = async ({ browser, devices, analyser, url, dir }) => {
     if (glyph <= 0) fail(`${label}: no link glyph drawn after reload`);
     const counts = await countStoredRows(page);
     if ((counts.tiles ?? 0) === 0) fail(`${label}: no tile stored in IndexedDB after reload`);
+    await pickTextTool();
     await drawWithTouch(page, [{ x: at.x + 20, y: at.y }]);
     await editor.waitFor({ state: "visible", timeout: 5000 });
     await toolbar.waitFor({ state: "visible", timeout: 5000 });
