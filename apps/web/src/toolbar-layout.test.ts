@@ -28,18 +28,20 @@ const broken = () => {
 
 test("the collapsed bar is one row of the everyday controls and the toggle", () => {
   expect(toolbarRows(toolbarLayout("Quick", false, false))).toEqual([
-    ["Colour", "Pencil", "Eraser", "Undo", "Level", "Connection", "Expand"],
+    ["Wheel", "Pencil", "Eraser", "Undo", "Level", "Connection", "Expand"],
   ]);
 });
 
-test("the expanded bar adds sizes, the other tools and the palette flip, one colour control", () => {
+test("the expanded bar adds sizes, all ten colours, the custom slots, the other tools and the flip", () => {
   const rows = toolbarRows(toolbarLayout("Quick", false, true));
-  expect(rows.length).toBeLessThanOrEqual(4);
-  expect(rows.flat().filter((control) => control === "Colour")).toHaveLength(1);
+  expect(rows.length).toBeLessThanOrEqual(5);
+  expect(rows).toContainEqual(["Colours"]);
+  expect(rows).toContainEqual(["CustomSlots"]);
+  expect(rows.flat()).not.toContain("BaseColours");
   expect(rows.flat()).toEqual(
     expect.arrayContaining([
       "Sizes",
-      "Colour",
+      "Wheel",
       "Pan",
       "Select",
       "Redo",
@@ -51,11 +53,21 @@ test("the expanded bar adds sizes, the other tools and the palette flip, one col
   );
 });
 
+test("only the palette carries the hex field and the quick bars never show the custom slots", () => {
+  for (const layout of ["Wide", "Collapsed"] as const) {
+    expect(toolbarRows(layout).flat()).not.toContain("CustomSlots");
+  }
+  for (const layout of ["Wide", "Collapsed", "Expanded"] as const) {
+    expect(toolbarRows(layout).flat()).not.toContain("Hex");
+  }
+});
+
 test("a wide screen shows every tool, the shapes and the flip on one row without a toggle", () => {
   expect(toolbarRows(toolbarLayout("Quick", true, false))).toEqual([
     [
       "Sizes",
-      "Colour",
+      "BaseColours",
+      "Wheel",
       "Swap",
       "Pan",
       "Select",
@@ -84,7 +96,10 @@ test("the palette holds every tool and the flip back, on any screen, without a t
           "Width",
           "Styles",
           "Shapes",
-          "Colour",
+          "Colours",
+          "CustomSlots",
+          "Wheel",
+          "Hex",
           "Swap",
           "Pan",
           "Select",
@@ -97,7 +112,7 @@ test("the palette holds every tool and the flip back, on any screen, without a t
         ]),
       );
       expect(controls).not.toContain("Expand");
-      expect(controls.filter((control) => control === "Colour")).toHaveLength(1);
+      expect(controls).not.toContain("BaseColours");
     }
   }
 });

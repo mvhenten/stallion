@@ -8,7 +8,14 @@ import {
 } from "@stallion/schema";
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { ColourControl } from "./colour-control";
+import {
+  ColourSwatches,
+  ColourWheel,
+  CustomSlotRow,
+  HexField,
+  useCustomSlots,
+} from "./colour-control";
+import { STANDARD_COLOURS } from "./colour-slots";
 import { type LevelBrowser, LevelChip } from "./level-chip";
 import { usePaletteFit } from "./palette-fit";
 import type { Presence } from "./presence";
@@ -35,6 +42,8 @@ import {
   toolbarRows,
   WIDE_QUERY,
 } from "./toolbar-layout";
+
+const BASE_COLOURS = 6;
 
 const DOT_PX = { Small: 4, Medium: 9, Large: 16 } as const;
 
@@ -182,6 +191,15 @@ export function Toolbar({
   };
   const drawMode: Tool["mode"] = tool.mode === "Shape" ? "Shape" : "Pencil";
   const drawing = tool.mode === "Pencil" || tool.mode === "Shape";
+  const custom = useCustomSlots();
+  const pickPrimary = (primary: number) => {
+    custom.stop();
+    pick({ ...tool, primary });
+  };
+  const mix = (primary: number) => {
+    custom.track(primary);
+    onChange({ ...tool, primary });
+  };
   const pickStyle = (style: StrokeStyle) => {
     saveStyle(storage, style);
     pick({ ...tool, style, mode: drawMode });
@@ -294,14 +312,38 @@ export function Toolbar({
         </button>
       </fieldset>
     ),
-    Colour: () => (
-      <ColourControl
-        key="Colour"
+    Colours: () => (
+      <ColourSwatches
+        key="Colours"
+        count={STANDARD_COLOURS.length}
         primary={tool.primary}
         secondary={tool.secondary}
-        beside={palette}
-        onPrimary={(primary) => onChange({ ...tool, primary })}
-        onSecondary={(secondary) => onChange({ ...tool, secondary })}
+        onPrimary={pickPrimary}
+        onSecondary={(secondary) => pick({ ...tool, secondary })}
+      />
+    ),
+    BaseColours: () => (
+      <ColourSwatches
+        key="BaseColours"
+        count={BASE_COLOURS}
+        primary={tool.primary}
+        secondary={tool.secondary}
+        onPrimary={pickPrimary}
+        onSecondary={(secondary) => pick({ ...tool, secondary })}
+      />
+    ),
+    Wheel: () => <ColourWheel key="Wheel" primary={tool.primary} onMix={mix} />,
+    Hex: () => <HexField key="Hex" rgb={tool.primary} onPick={mix} />,
+    CustomSlots: () => (
+      <CustomSlotRow
+        key="CustomSlots"
+        slots={custom.slots}
+        primary={tool.primary}
+        onTap={(index) => {
+          const rgb = custom.tap(index, tool.primary);
+          if (rgb !== undefined) pick({ ...tool, primary: rgb });
+        }}
+        onClear={custom.clear}
       />
     ),
     Pencil: () => (

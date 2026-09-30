@@ -15,7 +15,11 @@ export type Control =
   | "Width"
   | "Styles"
   | "Shapes"
-  | "Colour"
+  | "Colours"
+  | "BaseColours"
+  | "Wheel"
+  | "Hex"
+  | "CustomSlots"
   | "Pencil"
   | "Sticky"
   | "Text"
@@ -35,7 +39,8 @@ export type ToolbarLayout = "Wide" | "Collapsed" | "Expanded" | "Palette";
 
 const WIDE_ROW: readonly Control[] = [
   "Sizes",
-  "Colour",
+  "BaseColours",
+  "Wheel",
   "Swap",
   "Pan",
   "Select",
@@ -52,7 +57,7 @@ const WIDE_ROW: readonly Control[] = [
 ];
 
 const COLLAPSED_ROW: readonly Control[] = [
-  "Colour",
+  "Wheel",
   "Pencil",
   "Eraser",
   "Undo",
@@ -64,6 +69,8 @@ const COLLAPSED_ROW: readonly Control[] = [
 const EXPANDED_ROWS: readonly (readonly Control[])[] = [
   COLLAPSED_ROW,
   ["Sizes", "Swap", "Pan", "Select", "Redo", "Share"],
+  ["Colours"],
+  ["CustomSlots"],
   ["Shapes", "Sticky", "Text", "Flip"],
 ];
 
@@ -73,7 +80,10 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Width"],
   ["Styles"],
   ["Shapes"],
-  ["Colour", "Swap", "Pan", "Select", "Eraser", "Sticky", "Text"],
+  ["Colours"],
+  ["CustomSlots"],
+  ["Wheel", "Hex"],
+  ["Swap", "Pan", "Select", "Eraser", "Sticky", "Text"],
   ["Undo", "Redo"],
   ["Level", "Share"],
 ];

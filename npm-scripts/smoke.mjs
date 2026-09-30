@@ -345,23 +345,8 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
-const openColours = async (page) => {
-  await page.getByRole("button", { name: /^Colours, now #/ }).tap();
-  const popover = page.getByRole("dialog", { name: "Colours" });
-  await popover.waitFor({ state: "visible", timeout: 5000 });
-  return popover;
-};
-
-const closeColours = async (page) => {
-  await page.keyboard.press("Escape");
-  await page.getByRole("dialog", { name: "Colours" }).waitFor({ state: "hidden", timeout: 5000 });
-};
-
-const pickColour = async (page, label) => {
-  const popover = await openColours(page);
-  await popover.getByRole("button", { name: label, exact: true }).tap();
-  await closeColours(page);
-};
+const pickColour = (page, label) =>
+  page.locator(PALETTE).getByRole("button", { name: label, exact: true }).tap();
 
 const CUSTOM_HEX = "#123456";
 const CUSTOM_RGB = [0x12, 0x34, 0x56];
@@ -392,16 +377,14 @@ const smokeCustomColour = async ({ browser, devices, analyser, url, dir }) => {
     const palette = page.locator(PALETTE);
     await palette.waitFor({ state: "visible", timeout: 5000 });
     await palette.getByRole("button", { name: "Large pencil" }).tap();
-    const colours = await openColours(page);
-    await colours.getByRole("button", { name: "Empty slot 1" }).tap();
-    const hex = colours.getByRole("textbox", { name: "Hex colour" });
+    await palette.getByRole("button", { name: "Empty slot 1" }).tap();
+    const hex = palette.getByRole("textbox", { name: "Hex colour" });
     await hex.fill(CUSTOM_HEX);
     await hex.press("Enter");
-    await colours
+    await palette
       .getByRole("button", { name: `Slot 1, ${CUSTOM_HEX}, following the mix` })
       .waitFor({ state: "visible", timeout: 5000 });
     const picked = await shot("picked");
-    await closeColours(page);
     check();
     const viewport = page.viewportSize() ?? fail("no viewport");
     const box = (await palette.boundingBox()) ?? fail("custom colour: no palette bounding box");
@@ -420,11 +403,11 @@ const smokeCustomColour = async ({ browser, devices, analyser, url, dir }) => {
     const reloaded = await shot("reloaded", clip);
     const kept = await colourRatio(analyser, reloaded.buffer, CUSTOM_RGB);
     if (kept < MIN_INK_RATIO) fail(`custom colour: ${CUSTOM_HEX} gone after reload`);
-    const reopened = await openColours(page);
-    const slot = reopened.getByRole("button", { name: `Slot 1, ${CUSTOM_HEX}`, exact: true });
+    const slot = page
+      .locator(PALETTE)
+      .getByRole("button", { name: `Slot 1, ${CUSTOM_HEX}`, exact: true });
     if (!(await slot.isVisible())) fail("custom colour: the custom slot is gone after reload");
     const slotShot = await shot("slot-reloaded");
-    await closeColours(page);
     check();
     return {
       match: Number(kept.toFixed(3)),

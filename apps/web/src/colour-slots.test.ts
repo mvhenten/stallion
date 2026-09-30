@@ -6,7 +6,6 @@ import {
   clearSlot,
   emptySlots,
   loadCustomSlots,
-  placeColourPopover,
   STANDARD_COLOURS,
   saveCustomSlots,
   stopTracking,
@@ -105,38 +104,4 @@ test("slots persist per device, drop bad entries and survive blocked storage", (
   expect(loadCustomSlots(() => store).colours).toHaveLength(CUSTOM_SLOT_COUNT);
   expect(loadCustomSlots(broken)).toEqual(emptySlots());
   expect(() => saveCustomSlots(broken, slots)).not.toThrow();
-});
-
-const size = { width: 252, height: 330 };
-
-test("the popover sits under the bar, centred on the face and clamped inside a phone", () => {
-  const viewport = { width: 412, height: 839 };
-  const face = { left: 30, top: 16, right: 74, bottom: 60 };
-  const bar = { left: 24, top: 12, right: 388, bottom: 66 };
-  expect(placeColourPopover(face, bar, size, viewport, false)).toEqual({
-    left: 16,
-    top: 76,
-    maxHeight: 330,
-  });
-});
-
-test("beside the palette the popover opens to its right and stays inside a tablet", () => {
-  const viewport = { width: 800, height: 1280 };
-  const face = { left: 22, top: 1200, right: 66, bottom: 1244 };
-  const bar = { left: 16, top: 12, right: 214, bottom: 1250 };
-  expect(placeColourPopover(face, bar, size, viewport, true)).toEqual({
-    left: 224,
-    top: 934,
-    maxHeight: 330,
-  });
-});
-
-test("a short viewport caps the popover height and flips it above the bar when needed", () => {
-  const viewport = { width: 1440, height: 400 };
-  const face = { left: 600, top: 320, right: 644, bottom: 364 };
-  const bar = { left: 300, top: 316, right: 1100, bottom: 368 };
-  const spot = placeColourPopover(face, bar, size, viewport, false);
-  expect(spot.top).toBeGreaterThanOrEqual(16);
-  expect(spot.top + spot.maxHeight).toBeLessThanOrEqual(bar.top);
-  expect(spot.left + size.width).toBeLessThanOrEqual(viewport.width - 16);
 });
