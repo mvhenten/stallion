@@ -50,7 +50,7 @@ import {
   PREVIEW_WIDTH,
   previewFit,
 } from "./level-objects";
-import { type Candidate, isSmall, locate, rings, screenRadius } from "./locator";
+import { type Candidate, isLocatingMode, isSmall, locate, rings, screenRadius } from "./locator";
 import {
   displayName,
   PRESENCE_THROTTLE_MS,
@@ -466,7 +466,7 @@ export function createSurface(
       y: (world.y - camera.y) * camera.zoom * dpr,
     });
     const markers: Marker[] = [];
-    const locating = currentTool().mode === "Select";
+    const locating = isLocatingMode(currentTool().mode);
     candidates = [];
     for (const original of ordered) {
       const resized =
@@ -819,7 +819,9 @@ export function createSurface(
   };
 
   const liveLocators = () =>
-    hover && !drag && !resizing && currentTool().mode === "Select" ? locate(candidates, hover) : [];
+    hover && !drag && !resizing && isLocatingMode(currentTool().mode)
+      ? locate(candidates, hover)
+      : [];
 
   const renderLocators = (dpr: number) => {
     const live = liveLocators();

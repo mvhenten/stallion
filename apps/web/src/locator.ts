@@ -1,5 +1,6 @@
 import { type BBox, MARKER_PX, type Point } from "@stallion/geometry";
 import { ERASER_TOLERANCE_PX } from "./eraser";
+import type { ToolMode } from "./surface";
 
 export const LOCATOR_SEARCH_PX = 120;
 export const SMALL_RADIUS_PX = 10;
@@ -19,6 +20,10 @@ export const screenRadius = (bbox: BBox, zoom: number): number =>
   Math.max(MARKER_PX / 2, (Math.max(bbox.maxX - bbox.minX, bbox.maxY - bbox.minY) * zoom) / 2);
 
 export const isSmall = (radius: number): boolean => radius < SMALL_RADIUS_PX;
+
+const LOCATING_MODES = new Set<ToolMode>(["Select", "Pan", "Eraser"]);
+
+export const isLocatingMode = (mode: ToolMode): boolean => LOCATING_MODES.has(mode);
 
 export function locate(candidates: Iterable<Candidate>, pointer: Point): Locator[] {
   const near: { candidate: Candidate; distance: number }[] = [];

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   type Candidate,
+  isLocatingMode,
   LOCATOR_MAX,
   LOCATOR_SEARCH_PX,
   locate,
@@ -10,8 +11,14 @@ import {
   rings,
   screenRadius,
 } from "./locator";
+import type { ToolMode } from "./surface";
 
 const dot = (x: number, y: number, radius = 1): Candidate => ({ x, y, radius, style: "#ff0000" });
+
+test("the ripple runs in Select, Pan and Eraser, but not while drawing", () => {
+  const modes: ToolMode[] = ["Pencil", "Shape", "Sticky", "Text", "Pan", "Eraser", "Select"];
+  expect(modes.filter(isLocatingMode)).toEqual(["Pan", "Eraser", "Select"]);
+});
 
 test("a sub-pixel object counts as a marker-sized radius", () => {
   expect(screenRadius({ minX: 0, minY: 0, maxX: 0.1, maxY: 0.1 }, 1)).toBe(1);
