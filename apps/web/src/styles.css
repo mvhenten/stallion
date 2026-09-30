@@ -1256,3 +1256,22 @@ body,
     grid-template-columns: repeat(5, 44px);
   }
 }
+
+.toolbar[data-layout="Palette"] .colours,
+.toolbar[data-layout="Palette"] .custom-slots {
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  justify-items: center;
+  justify-self: stretch;
+}
+
+.toolbar[data-layout="Palette"] .colours .tool,
+.toolbar[data-layout="Palette"] .custom-slots .tool {
+  width: 34px;
+  height: 34px;
+}
+
+.toolbar[data-layout="Palette"] .colours .swatch-fill,
+.toolbar[data-layout="Palette"] .custom-slots .swatch-fill {
+  width: 26px;
+  height: 26px;
+}

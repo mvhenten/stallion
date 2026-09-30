@@ -80,10 +80,8 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Width"],
   ["Styles"],
   ["Shapes"],
-  ["Colours"],
-  ["CustomSlots"],
-  ["Wheel", "Hex"],
-  ["Swap", "Pan", "Select", "Eraser", "Sticky", "Text"],
+  ["Colours", "CustomSlots", "Hex"],
+  ["Wheel", "Swap", "Pan", "Select", "Eraser", "Sticky", "Text"],
   ["Undo", "Redo"],
   ["Level", "Share"],
 ];
