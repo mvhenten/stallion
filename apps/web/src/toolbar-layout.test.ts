@@ -2,18 +2,14 @@ import { expect, test } from "vitest";
 import {
   expandedAfterPick,
   loadMode,
-  loadRecentColours,
   loadStyle,
   MODE_KEY,
   placePopover,
-  RECENT_COLOURS_KEY,
   STYLE_KEY,
   saveMode,
-  saveRecentColours,
   saveStyle,
   toolbarLayout,
   toolbarRows,
-  withRecentColour,
 } from "./toolbar-layout";
 
 const memoryStore = () => {
@@ -32,17 +28,18 @@ const broken = () => {
 
 test("the collapsed bar is one row of the everyday controls and the toggle", () => {
   expect(toolbarRows(toolbarLayout("Quick", false, false))).toEqual([
-    ["CurrentColour", "Pencil", "Eraser", "Undo", "Level", "Connection", "Expand"],
+    ["Colour", "Pencil", "Eraser", "Undo", "Level", "Connection", "Expand"],
   ]);
 });
 
-test("the expanded bar adds sizes, colours, the other tools and the palette flip", () => {
+test("the expanded bar adds sizes, the other tools and the palette flip, one colour control", () => {
   const rows = toolbarRows(toolbarLayout("Quick", false, true));
   expect(rows.length).toBeLessThanOrEqual(4);
+  expect(rows.flat().filter((control) => control === "Colour")).toHaveLength(1);
   expect(rows.flat()).toEqual(
     expect.arrayContaining([
       "Sizes",
-      "Colours",
+      "Colour",
       "Pan",
       "Select",
       "Redo",
@@ -58,7 +55,7 @@ test("a wide screen shows every tool, the shapes and the flip on one row without
   expect(toolbarRows(toolbarLayout("Quick", true, false))).toEqual([
     [
       "Sizes",
-      "Colours",
+      "Colour",
       "Swap",
       "Pan",
       "Select",
@@ -87,9 +84,7 @@ test("the palette holds every tool and the flip back, on any screen, without a t
           "Width",
           "Styles",
           "Shapes",
-          "Colours",
-          "CustomColour",
-          "RecentColours",
+          "Colour",
           "Swap",
           "Pan",
           "Select",
@@ -102,6 +97,7 @@ test("the palette holds every tool and the flip back, on any screen, without a t
         ]),
       );
       expect(controls).not.toContain("Expand");
+      expect(controls.filter((control) => control === "Colour")).toHaveLength(1);
     }
   }
 });
@@ -153,17 +149,4 @@ test("a popover flips above its anchor when there is no room below", () => {
     side: "Above",
     maxHeight: 274,
   });
-});
-
-test("recent colours keep the last 8 distinct picks, newest first, and survive blocked storage", () => {
-  const store = memoryStore();
-  let recents: number[] = [];
-  for (const rgb of [1, 2, 3, 4, 5, 6, 7, 8, 9, 3]) recents = withRecentColour(recents, rgb);
-  expect(recents).toEqual([3, 9, 8, 7, 6, 5, 4, 2]);
-  saveRecentColours(() => store, recents);
-  expect(loadRecentColours(() => store)).toEqual(recents);
-  store.setItem(RECENT_COLOURS_KEY, '[1, -1, 16777216, "x", 2]');
-  expect(loadRecentColours(() => store)).toEqual([1, 2]);
-  expect(loadRecentColours(broken)).toEqual([]);
-  expect(() => saveRecentColours(broken, recents)).not.toThrow();
 });

@@ -89,7 +89,12 @@ const openBoard = async (page, url, colour) => {
   await page.goto(url, { waitUntil: "load" });
   await page.locator("canvas.surface").waitFor({ state: "visible", timeout: 15000 });
   await page.getByRole("button", { name: "Large pencil" }).click();
-  await page.getByRole("button", { name: colour.label, exact: true }).click();
+  await page.getByRole("button", { name: /^Colours, now #/ }).click();
+  await page
+    .getByRole("dialog", { name: "Colours" })
+    .getByRole("button", { name: colour.label, exact: true })
+    .click();
+  await page.keyboard.press("Escape");
 };
 
 const circle = (cx, cy, r, turns = 1, start = 0) =>

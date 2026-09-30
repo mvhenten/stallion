@@ -305,7 +305,7 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
     const palette = page.locator(PALETTE);
     if (!(await palette.isVisible())) fail("palette: the quick bar came back after a reload");
     await palette.getByRole("button", { name: "Large pencil" }).tap();
-    await palette.getByRole("button", { name: "Colour 2" }).tap();
+    await pickColour(page, "Colour 2");
     await page.waitForTimeout(500);
     check();
     const viewport = page.viewportSize() ?? fail("no viewport");
@@ -345,6 +345,24 @@ const smokePalette = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
+const openColours = async (page) => {
+  await page.getByRole("button", { name: /^Colours, now #/ }).tap();
+  const popover = page.getByRole("dialog", { name: "Colours" });
+  await popover.waitFor({ state: "visible", timeout: 5000 });
+  return popover;
+};
+
+const closeColours = async (page) => {
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: "Colours" }).waitFor({ state: "hidden", timeout: 5000 });
+};
+
+const pickColour = async (page, label) => {
+  const popover = await openColours(page);
+  await popover.getByRole("button", { name: label, exact: true }).tap();
+  await closeColours(page);
+};
+
 const CUSTOM_HEX = "#123456";
 const CUSTOM_RGB = [0x12, 0x34, 0x56];
 
@@ -374,13 +392,16 @@ const smokeCustomColour = async ({ browser, devices, analyser, url, dir }) => {
     const palette = page.locator(PALETTE);
     await palette.waitFor({ state: "visible", timeout: 5000 });
     await palette.getByRole("button", { name: "Large pencil" }).tap();
-    const hex = palette.getByRole("textbox", { name: "Hex colour" });
+    const colours = await openColours(page);
+    await colours.getByRole("button", { name: "Empty slot 1" }).tap();
+    const hex = colours.getByRole("textbox", { name: "Hex colour" });
     await hex.fill(CUSTOM_HEX);
     await hex.press("Enter");
-    await palette
-      .getByRole("button", { name: `Recent colour ${CUSTOM_HEX}` })
+    await colours
+      .getByRole("button", { name: `Slot 1, ${CUSTOM_HEX}, following the mix` })
       .waitFor({ state: "visible", timeout: 5000 });
     const picked = await shot("picked");
+    await closeColours(page);
     check();
     const viewport = page.viewportSize() ?? fail("no viewport");
     const box = (await palette.boundingBox()) ?? fail("custom colour: no palette bounding box");
@@ -399,13 +420,15 @@ const smokeCustomColour = async ({ browser, devices, analyser, url, dir }) => {
     const reloaded = await shot("reloaded", clip);
     const kept = await colourRatio(analyser, reloaded.buffer, CUSTOM_RGB);
     if (kept < MIN_INK_RATIO) fail(`custom colour: ${CUSTOM_HEX} gone after reload`);
-    if (!(await page.getByRole("button", { name: `Recent colour ${CUSTOM_HEX}` }).isVisible())) {
-      fail("custom colour: the recent colour is gone after reload");
-    }
+    const reopened = await openColours(page);
+    const slot = reopened.getByRole("button", { name: `Slot 1, ${CUSTOM_HEX}`, exact: true });
+    if (!(await slot.isVisible())) fail("custom colour: the custom slot is gone after reload");
+    const slotShot = await shot("slot-reloaded");
+    await closeColours(page);
     check();
     return {
       match: Number(kept.toFixed(3)),
-      screenshots: [picked.path, drawn.path, reloaded.path],
+      screenshots: [picked.path, drawn.path, reloaded.path, slotShot.path],
     };
   } finally {
     await context.close();
@@ -607,12 +630,12 @@ const smokeHighlighter = async ({ browser, devices, analyser, url, dir }) => {
       overlap: { x: cx, y: cy },
     };
     await palette.getByRole("button", { name: "Pen style" }).tap();
-    await palette.getByRole("button", { name: "Colour 5" }).tap();
+    await pickColour(page, "Colour 5");
     await palette.getByRole("button", { name: "40 px pencil" }).tap();
     await drawWithTouch(page, linePath({ x: cx - 150, y: cy }, { x: cx + 150, y: cy }));
     await page.waitForTimeout(500);
     await palette.getByRole("button", { name: "Highlighter style" }).tap();
-    await palette.getByRole("button", { name: "Colour 3" }).tap();
+    await pickColour(page, "Colour 3");
     await drawWithTouch(page, linePath({ x: cx, y: cy - 150 }, { x: cx, y: cy + 150 }));
     await page.waitForTimeout(1300);
     const drawn = await measure(spots, "after drawing");
@@ -999,7 +1022,7 @@ const smokeSticky = async ({ browser, devices, analyser, url, dir, device }) => 
     const palette = page.locator(PALETTE);
     await palette.waitFor({ state: "visible", timeout: 5000 });
     await page.waitForTimeout(500);
-    await palette.getByRole("button", { name: STICKY_COLOUR, exact: true }).tap();
+    await pickColour(page, STICKY_COLOUR);
     await palette.getByRole("button", { name: "Sticky note" }).tap();
     await page.locator("[data-toolbar-flip]").tap();
     await page.locator(PALETTE).waitFor({ state: "hidden", timeout: 5000 });
@@ -1128,7 +1151,7 @@ const smokeText = async ({ browser, devices, analyser, url, dir, device }) => {
     const palette = page.locator(PALETTE);
     await palette.waitFor({ state: "visible", timeout: 5000 });
     await page.waitForTimeout(500);
-    await palette.getByRole("button", { name: TEXT_COLOUR, exact: true }).tap();
+    await pickColour(page, TEXT_COLOUR);
     await palette.getByRole("button", { name: "Text tool" }).tap();
     await page.locator("[data-toolbar-flip]").tap();
     await page.locator(PALETTE).waitFor({ state: "hidden", timeout: 5000 });

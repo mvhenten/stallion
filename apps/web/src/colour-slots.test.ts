@@ -1,0 +1,142 @@
+import { PALETTE_RGB } from "@stallion/schema";
+import { expect, test } from "vitest";
+import {
+  CUSTOM_COLOURS_KEY,
+  CUSTOM_SLOT_COUNT,
+  clearSlot,
+  emptySlots,
+  loadCustomSlots,
+  placeColourPopover,
+  STANDARD_COLOURS,
+  saveCustomSlots,
+  stopTracking,
+  tapSlot,
+  trackColour,
+} from "./colour-slots";
+
+const memoryStore = () => {
+  const items = new Map<string, string>();
+  return {
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      items.set(key, value);
+    },
+  };
+};
+
+const broken = () => {
+  throw new Error("storage blocked");
+};
+
+test("the standard swatches keep the six wire colours first and add cyan, pink, yellow and white", () => {
+  expect(STANDARD_COLOURS.slice(0, 6).map(({ rgb }) => rgb)).toEqual([...PALETTE_RGB]);
+  expect(STANDARD_COLOURS.slice(6).map(({ name }) => name)).toEqual([
+    "Cyan",
+    "Pink",
+    "Yellow",
+    "White",
+  ]);
+  expect(STANDARD_COLOURS.at(-1)?.rgb).toBe(0xffffff);
+});
+
+test("tapping an empty slot fills it with the current colour and tracks every later change", () => {
+  const selected = tapSlot(emptySlots(), 2, 0x0090ff);
+  expect(selected.pick).toBeUndefined();
+  expect(selected.slots.tracking).toBe(2);
+  expect(selected.slots.colours[2]).toBe(0x0090ff);
+  const mixed = trackColour(trackColour(selected.slots, 0x112233), 0x123456);
+  expect(mixed.colours[2]).toBe(0x123456);
+  expect(mixed.colours.filter((rgb) => rgb !== undefined)).toEqual([0x123456]);
+});
+
+test("without a tracked slot a colour change leaves the slots alone", () => {
+  const slots = emptySlots();
+  expect(trackColour(slots, 0x123456)).toBe(slots);
+});
+
+test("tapping a filled slot picks its colour and stops tracking", () => {
+  const first = trackColour(tapSlot(emptySlots(), 0, 1).slots, 0x123456);
+  const second = trackColour(tapSlot(first, 1, 0x123456).slots, 0x654321);
+  const picked = tapSlot(second, 0, 0x654321);
+  expect(picked.pick).toBe(0x123456);
+  expect(picked.slots.tracking).toBeUndefined();
+  expect(trackColour(picked.slots, 0xabcdef).colours.slice(0, 2)).toEqual([0x123456, 0x654321]);
+});
+
+test("clearing a slot empties it and ends tracking when it was the tracked one", () => {
+  const tracked = tapSlot(emptySlots(), 3, 0x123456).slots;
+  const cleared = clearSlot(tracked, 3);
+  expect(cleared.colours[3]).toBeUndefined();
+  expect(cleared.tracking).toBeUndefined();
+  const other = tapSlot(tapSlot(emptySlots(), 1, 5).slots, 4, 6).slots;
+  expect(clearSlot(other, 1).tracking).toBe(4);
+  expect(stopTracking(other).tracking).toBeUndefined();
+});
+
+test("slots persist per device, drop bad entries and survive blocked storage", () => {
+  const store = memoryStore();
+  const slots = trackColour(tapSlot(emptySlots(), 5, 1).slots, 0x123456);
+  saveCustomSlots(() => store, slots);
+  expect(JSON.parse(store.getItem(CUSTOM_COLOURS_KEY) ?? "")).toEqual([
+    null,
+    null,
+    null,
+    null,
+    null,
+    0x123456,
+    null,
+    null,
+  ]);
+  const loaded = loadCustomSlots(() => store);
+  expect(loaded.colours).toEqual(slots.colours);
+  expect(loaded.tracking).toBeUndefined();
+  store.setItem(CUSTOM_COLOURS_KEY, '[1, -1, 16777216, "x", 2.5, 7, 8, 9, 10, 11]');
+  expect(loadCustomSlots(() => store).colours).toEqual([
+    1,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    7,
+    8,
+    9,
+  ]);
+  store.setItem(CUSTOM_COLOURS_KEY, "{");
+  expect(loadCustomSlots(() => store).colours).toHaveLength(CUSTOM_SLOT_COUNT);
+  expect(loadCustomSlots(broken)).toEqual(emptySlots());
+  expect(() => saveCustomSlots(broken, slots)).not.toThrow();
+});
+
+const size = { width: 252, height: 330 };
+
+test("the popover sits under the bar, centred on the face and clamped inside a phone", () => {
+  const viewport = { width: 412, height: 839 };
+  const face = { left: 30, top: 16, right: 74, bottom: 60 };
+  const bar = { left: 24, top: 12, right: 388, bottom: 66 };
+  expect(placeColourPopover(face, bar, size, viewport, false)).toEqual({
+    left: 16,
+    top: 76,
+    maxHeight: 330,
+  });
+});
+
+test("beside the palette the popover opens to its right and stays inside a tablet", () => {
+  const viewport = { width: 800, height: 1280 };
+  const face = { left: 22, top: 1200, right: 66, bottom: 1244 };
+  const bar = { left: 16, top: 12, right: 214, bottom: 1250 };
+  expect(placeColourPopover(face, bar, size, viewport, true)).toEqual({
+    left: 224,
+    top: 934,
+    maxHeight: 330,
+  });
+});
+
+test("a short viewport caps the popover height and flips it above the bar when needed", () => {
+  const viewport = { width: 1440, height: 400 };
+  const face = { left: 600, top: 320, right: 644, bottom: 364 };
+  const bar = { left: 300, top: 316, right: 1100, bottom: 368 };
+  const spot = placeColourPopover(face, bar, size, viewport, false);
+  expect(spot.top).toBeGreaterThanOrEqual(16);
+  expect(spot.top + spot.maxHeight).toBeLessThanOrEqual(bar.top);
+  expect(spot.left + size.width).toBeLessThanOrEqual(viewport.width - 16);
+});

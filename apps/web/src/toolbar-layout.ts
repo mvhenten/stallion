@@ -8,10 +8,6 @@ export const MODE_KEY = "stallion:toolbar-mode";
 
 export const STYLE_KEY = "stallion:stroke-style";
 
-export const RECENT_COLOURS_KEY = "stallion:recent-colours";
-
-export const MAX_RECENT_COLOURS = 8;
-
 export type ToolbarMode = "Quick" | "Palette";
 
 export type Control =
@@ -19,10 +15,7 @@ export type Control =
   | "Width"
   | "Styles"
   | "Shapes"
-  | "Colours"
-  | "CustomColour"
-  | "RecentColours"
-  | "CurrentColour"
+  | "Colour"
   | "Pencil"
   | "Sticky"
   | "Text"
@@ -42,7 +35,7 @@ export type ToolbarLayout = "Wide" | "Collapsed" | "Expanded" | "Palette";
 
 const WIDE_ROW: readonly Control[] = [
   "Sizes",
-  "Colours",
+  "Colour",
   "Swap",
   "Pan",
   "Select",
@@ -59,7 +52,7 @@ const WIDE_ROW: readonly Control[] = [
 ];
 
 const COLLAPSED_ROW: readonly Control[] = [
-  "CurrentColour",
+  "Colour",
   "Pencil",
   "Eraser",
   "Undo",
@@ -70,8 +63,7 @@ const COLLAPSED_ROW: readonly Control[] = [
 
 const EXPANDED_ROWS: readonly (readonly Control[])[] = [
   COLLAPSED_ROW,
-  ["Sizes", "Pan", "Select", "Redo", "Share"],
-  ["Colours", "Swap"],
+  ["Sizes", "Swap", "Pan", "Select", "Redo", "Share"],
   ["Shapes", "Sticky", "Text", "Flip"],
 ];
 
@@ -81,9 +73,7 @@ const PALETTE_ROWS: readonly (readonly Control[])[] = [
   ["Width"],
   ["Styles"],
   ["Shapes"],
-  ["Colours"],
-  ["CustomColour", "RecentColours"],
-  ["Swap", "Pan", "Select", "Eraser", "Sticky", "Text"],
+  ["Colour", "Swap", "Pan", "Select", "Eraser", "Sticky", "Text"],
   ["Undo", "Redo"],
   ["Level", "Share"],
 ];
@@ -157,29 +147,6 @@ export const loadStyle = (store: () => Store): StrokeStyle => {
 export const saveStyle = (store: () => Store, style: StrokeStyle): void => {
   try {
     store().setItem(STYLE_KEY, style);
-  } catch {
-    return;
-  }
-};
-
-const isRgb = (value: unknown): value is number =>
-  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 0xffffff;
-
-export const loadRecentColours = (store: () => Store): number[] => {
-  try {
-    const parsed: unknown = JSON.parse(store().getItem(RECENT_COLOURS_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter(isRgb).slice(0, MAX_RECENT_COLOURS) : [];
-  } catch {
-    return [];
-  }
-};
-
-export const withRecentColour = (recents: readonly number[], rgb: number): number[] =>
-  [rgb, ...recents.filter((entry) => entry !== rgb)].slice(0, MAX_RECENT_COLOURS);
-
-export const saveRecentColours = (store: () => Store, recents: readonly number[]): void => {
-  try {
-    store().setItem(RECENT_COLOURS_KEY, JSON.stringify(recents));
   } catch {
     return;
   }
