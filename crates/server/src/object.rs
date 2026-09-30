@@ -9,6 +9,7 @@ pub const ZOOM_RANGE: std::ops::RangeInclusive<i32> = -40..=40;
 pub const MAX_COLOUR: u8 = 5;
 pub const MAX_RGB: u32 = 0xFF_FFFF;
 pub const WIDTH_RANGE: std::ops::RangeInclusive<f64> = 0.5..=96.0;
+pub const MAX_HREF_BYTES: usize = 2048;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +38,22 @@ pub enum StrokeStyle {
     Highlighter,
     Dashed,
     Uniform,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextFont {
+    #[default]
+    Sans,
+    Serif,
+    Mono,
+    Hand,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TextFit {
+    #[default]
+    Fixed,
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +121,16 @@ pub struct Text {
     pub width: f64,
     pub wrap_width: f64,
     pub text: String,
+    #[serde(default)]
+    pub font: TextFont,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(default)]
+    pub fit: TextFit,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,6 +143,16 @@ pub struct Sticky {
     pub background: u32,
     pub width: f64,
     pub text: String,
+    #[serde(default)]
+    pub font: TextFont,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+    #[serde(default)]
+    pub fit: TextFit,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -227,6 +264,7 @@ impl StallionObject {
                 Ok(())
             }
             StallionObject::Text(t) => {
+                validate_href(t.href.as_deref())?;
                 if !(t.wrap_width > 0.0 && t.wrap_width <= MAX_WRAP_WIDTH) {
                     return Err(format!(
                         "wrapWidth {} is outside 0..{MAX_WRAP_WIDTH}",
@@ -242,6 +280,7 @@ impl StallionObject {
                 Ok(())
             }
             StallionObject::Sticky(s) => {
+                validate_href(s.href.as_deref())?;
                 if s.background > MAX_RGB {
                     return Err(format!(
                         "background {:#x} is outside 0..0xFFFFFF",
@@ -258,6 +297,60 @@ impl StallionObject {
             }
         }
     }
+}
+
+// Mirrors HREF_PATTERN in packages/schema/src/text-style.ts.
+fn validate_href(href: Option<&str>) -> Result<(), String> {
+    let Some(href) = href else {
+        return Ok(());
+    };
+    if href.len() > MAX_HREF_BYTES {
+        return Err(format!(
+            "href of {} bytes is over {MAX_HREF_BYTES}",
+            href.len()
+        ));
+    }
+    let lower = href.to_ascii_lowercase();
+    let rest = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .ok_or("href must be an http or https URL")?;
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(host_end);
+    if !valid_authority(authority) {
+        return Err("href must name a host".into());
+    }
+    if !tail.bytes().all(|b| (b'!'..=b'~').contains(&b)) {
+        return Err("href must be printable ASCII without spaces".into());
+    }
+    Ok(())
+}
+
+fn valid_authority(authority: &str) -> bool {
+    let (host, port) = match authority.rfind(':') {
+        Some(at) if !authority[at..].contains(']') => {
+            (&authority[..at], Some(&authority[at + 1..]))
+        }
+        _ => (authority, None),
+    };
+    let port_ok =
+        port.is_none_or(|p| (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()));
+    let host_ok = if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        !inner.is_empty()
+            && inner
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+    } else {
+        let labels = host.strip_suffix('.').unwrap_or(host);
+        !labels.is_empty()
+            && labels.split('.').all(|label| {
+                !label.is_empty()
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+    };
+    port_ok && host_ok
 }
 
 fn validate_points(points: &[Point]) -> Result<(), String> {
@@ -304,6 +397,18 @@ pub(crate) mod tests {
     fn sticky_fixture() -> Vec<u8> {
         from_hex(include_str!(
             "../../../packages/schema/fixtures/sticky.cbor.hex"
+        ))
+    }
+
+    fn sticky_v2_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/sticky-v2.cbor.hex"
+        ))
+    }
+
+    fn text_v2_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/text-v2.cbor.hex"
         ))
     }
 
@@ -493,6 +598,84 @@ pub(crate) mod tests {
             background: 0xF7_6B15,
             width: 18.0,
             text: "Buy milk\nand a very long line that wraps".into(),
+            font: TextFont::Sans,
+            bold: false,
+            italic: false,
+            href: None,
+            fit: TextFit::Fixed,
+        }
+    }
+
+    #[test]
+    fn decodes_the_styled_sticky_and_text_fixtures() {
+        assert_eq!(
+            decode(&sticky_v2_fixture()),
+            Ok(StallionObject::Sticky(Sticky {
+                font: TextFont::Hand,
+                bold: true,
+                fit: TextFit::Auto,
+                ..golden_sticky()
+            }))
+        );
+        assert_eq!(
+            decode(&text_v2_fixture()),
+            Ok(StallionObject::Text(Text {
+                font: TextFont::Serif,
+                bold: true,
+                italic: true,
+                href: Some("https://example.com/a?b=c#d".into()),
+                ..golden_text()
+            }))
+        );
+    }
+
+    #[test]
+    fn accepts_http_links_and_rejects_bad_ones() {
+        for href in [
+            "http://example.com",
+            "HTTPS://example.com:8080/a?b=c#d",
+            "https://[::1]/x",
+        ] {
+            let text = StallionObject::Text(Text {
+                href: Some(href.into()),
+                ..golden_text()
+            });
+            assert_eq!(decode(&encode(text.clone())), Ok(text), "{href}");
+        }
+        let long = format!("https://example.com/{}", "a".repeat(MAX_HREF_BYTES));
+        for href in [
+            "javascript:alert(1)",
+            "mailto:someone@example.com",
+            "ftp://example.com/",
+            "https://",
+            "https:///path",
+            "https://example.com/a b",
+            "https://exämple.com/",
+            "https://bad%20link/",
+            "https://user@example.com/",
+            "https://a..b/",
+            "https://example.com:123456/",
+            long.as_str(),
+        ] {
+            let sticky = StallionObject::Sticky(Sticky {
+                href: Some(href.into()),
+                ..golden_sticky()
+            });
+            let error = decode(&encode(sticky)).unwrap_err();
+            assert!(error.contains("href"), "{href}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_font_or_fit() {
+        for (from, to) in [
+            (b"Serif".as_slice(), b"Serix".as_slice()),
+            (b"Fixed", b"Fixex"),
+        ] {
+            let mut unknown = text_v2_fixture();
+            let at = unknown.windows(5).position(|w| w == from).unwrap();
+            unknown[at..at + 5].copy_from_slice(to);
+            assert!(decode(&unknown).is_err());
         }
     }
 
@@ -564,6 +747,11 @@ pub(crate) mod tests {
             width: 24.0,
             wrap_width: 160.0,
             text: "Plain text that wraps\nover lines".into(),
+            font: TextFont::Sans,
+            bold: false,
+            italic: false,
+            href: None,
+            fit: TextFit::Fixed,
         }
     }
 

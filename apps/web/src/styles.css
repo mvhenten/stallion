@@ -1188,3 +1188,126 @@ body,
     padding: 0 8px;
   }
 }
+
+.context-toolbar {
+  position: fixed;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 2px 8px #0000001a;
+}
+
+.context-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.context-toolbar .context-row .tool {
+  width: 36px;
+  height: 36px;
+  color: var(--ink);
+}
+
+.context-toolbar .glyph {
+  font:
+    700 18px / 1 system-ui,
+    sans-serif;
+}
+
+.context-toolbar i.glyph {
+  font:
+    italic 400 19px / 1 Georgia,
+    "Times New Roman",
+    serif;
+}
+
+.context-toolbar .font-option,
+.context-toolbar .fit-toggle {
+  width: auto;
+  min-width: 36px;
+  padding: 0 8px;
+}
+
+.context-toolbar .fit-toggle {
+  font:
+    600 14px system-ui,
+    sans-serif;
+}
+
+.context-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: var(--line);
+}
+
+.font-size {
+  min-width: 26px;
+  text-align: center;
+  font:
+    600 14px system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.link-row {
+  flex-wrap: wrap;
+  justify-content: stretch;
+  width: 0;
+  min-width: 100%;
+}
+
+.link-field {
+  flex: 1 1 160px;
+  min-width: 0;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font:
+    15px system-ui,
+    sans-serif;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.link-field[aria-invalid="true"] {
+  border-color: #e5484d;
+}
+
+.context-action {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font:
+    600 14px system-ui,
+    sans-serif;
+  cursor: pointer;
+}
+
+.link-error {
+  flex-basis: 100%;
+  margin: 2px 4px;
+  color: #c8363b;
+  font:
+    13px / 1.3 system-ui,
+    sans-serif;
+}

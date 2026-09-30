@@ -301,6 +301,37 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "font": {
+          "default": "Sans",
+          "type": "string",
+          "enum": [
+            "Sans",
+            "Serif",
+            "Mono",
+            "Hand"
+          ]
+        },
+        "bold": {
+          "default": false,
+          "type": "boolean"
+        },
+        "italic": {
+          "default": false,
+          "type": "boolean"
+        },
+        "href": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/([A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.?|\\[[0-9A-Fa-f:.]+\\])(:[0-9]{1,5})?([/?#][!-~]*)?$"
+        },
+        "fit": {
+          "default": "Fixed",
+          "type": "string",
+          "enum": [
+            "Fixed",
+            "Auto"
+          ]
         }
       },
       "required": [
@@ -373,6 +404,37 @@
         "text": {
           "type": "string",
           "maxLength": 4096
+        },
+        "font": {
+          "default": "Sans",
+          "type": "string",
+          "enum": [
+            "Sans",
+            "Serif",
+            "Mono",
+            "Hand"
+          ]
+        },
+        "bold": {
+          "default": false,
+          "type": "boolean"
+        },
+        "italic": {
+          "default": false,
+          "type": "boolean"
+        },
+        "href": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:\\/\\/([A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.?|\\[[0-9A-Fa-f:.]+\\])(:[0-9]{1,5})?([/?#][!-~]*)?$"
+        },
+        "fit": {
+          "default": "Fixed",
+          "type": "string",
+          "enum": [
+            "Fixed",
+            "Auto"
+          ]
         }
       },
       "required": [

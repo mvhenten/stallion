@@ -19,6 +19,10 @@ const note: Sticky = {
   background: 0xfff3a0,
   width: 18,
   text: "",
+  font: "Sans",
+  bold: false,
+  italic: false,
+  fit: "Fixed",
 };
 
 type ShadowLog = { blur: number[]; fills: number };

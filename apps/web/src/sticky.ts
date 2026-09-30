@@ -1,13 +1,16 @@
 import type { StoredObject } from "@stallion/client-store";
 import { type BBox, nativeLevel, type Point, place } from "@stallion/geometry";
-import { clampUtf8, rgbHex, type Sticky } from "@stallion/schema";
+import { clampUtf8, MAX_WIDTH, MIN_WIDTH, rgbHex, type Sticky } from "@stallion/schema";
 import { clipRect } from "./clip";
-import { newObjectId, type Scale, scaleAbout } from "./stroke";
+import { fitFont } from "./fit";
+import { newObjectId, type Scale, scaleAbout, strokeWorldWidth } from "./stroke";
+import { applyTextChange, type TextChange } from "./text-change";
 import {
   clampFont,
   fontForScreen,
   LINE_HEIGHT,
-  type Measure,
+  type MeasureAt,
+  measureIn,
   paintLines,
   worldFont,
   wrapWorld,
@@ -49,12 +52,25 @@ export const stickyMetrics = (
   };
 };
 
-export const stickyLines = (sticky: Sticky, measureAt: (px: number) => Measure): string[] => {
+export const stickyLines = (sticky: Sticky, measureAt: MeasureAt): string[] => {
   const { font, inner } = stickyMetrics(sticky);
-  return wrapWorld(sticky.text, inner, font, measureAt);
+  return wrapWorld(sticky.text, inner, font, measureIn(measureAt, sticky));
 };
 
-const fitHeight = (sticky: Sticky, measureAt: (px: number) => Measure): Sticky => {
+export const autoFitSticky = (sticky: Sticky, measureAt: MeasureAt): Sticky => {
+  if (sticky.fit !== "Auto" || sticky.text.trim() === "") return sticky;
+  const unit = strokeWorldWidth(1, sticky.nativeZoom);
+  const { bbox } = sticky;
+  const font = fitFont(
+    sticky.text,
+    { width: bbox.maxX - bbox.minX, height: bbox.maxY - bbox.minY, padEm: PAD_EM },
+    { min: MIN_WIDTH * unit, max: MAX_WIDTH * unit },
+    measureIn(measureAt, sticky),
+  );
+  return { ...sticky, width: clampFont(font / unit) };
+};
+
+const fitHeight = (sticky: Sticky, measureAt: MeasureAt): Sticky => {
   const { pad, lineHeight } = stickyMetrics(sticky);
   const needed = pad * 2 + stickyLines(sticky, measureAt).length * lineHeight;
   const { bbox } = sticky;
@@ -84,6 +100,10 @@ export const newSticky = (background: number, zoom: number, centre: Point): Stic
     background,
     width: fontForScreen(STICKY_FONT_PX, nativeZoom, zoom),
     text: "",
+    font: "Sans",
+    bold: false,
+    italic: false,
+    fit: "Fixed",
   };
 };
 
@@ -93,12 +113,22 @@ export const startSticky = (
   centre: Point,
 ): StoredObject | undefined => placeSticky(newSticky(background, zoom, centre));
 
+const layoutSticky = (sticky: Sticky, measureAt: MeasureAt): Sticky =>
+  fitHeight(autoFitSticky(sticky, measureAt), measureAt);
+
 export const withText = (
   sticky: Sticky,
   text: string,
-  measureAt: (px: number) => Measure,
+  measureAt: MeasureAt,
 ): StoredObject | undefined =>
-  placeSticky(fitHeight({ ...sticky, text: clampUtf8(text) }, measureAt));
+  placeSticky(layoutSticky({ ...sticky, text: clampUtf8(text) }, measureAt));
+
+export const restyleSticky = (
+  sticky: Sticky,
+  change: TextChange,
+  measureAt: MeasureAt,
+): StoredObject | undefined =>
+  placeSticky(layoutSticky(applyTextChange(sticky, change), measureAt));
 
 export const translateSticky = (sticky: Sticky, dx: number, dy: number): StoredObject | undefined =>
   placeSticky({
@@ -114,7 +144,7 @@ export const translateSticky = (sticky: Sticky, dx: number, dy: number): StoredO
 export const scaleSticky = (
   sticky: Sticky,
   by: Scale,
-  measureAt: (px: number) => Measure,
+  measureAt: MeasureAt,
 ): StoredObject | undefined => {
   const a = scaleAbout(by, { x: sticky.bbox.minX, y: sticky.bbox.minY });
   const b = scaleAbout(by, { x: sticky.bbox.maxX, y: sticky.bbox.maxY });
@@ -125,6 +155,7 @@ export const scaleSticky = (
     maxY: Math.max(a.y, b.y),
   };
   if (!(bbox.maxX > bbox.minX && bbox.maxY > bbox.minY)) return undefined;
+  if (sticky.fit === "Auto") return placeSticky(layoutSticky({ ...sticky, bbox }, measureAt));
   const width = clampFont(sticky.width * Math.sqrt(Math.abs(by.sx * by.sy)));
   return placeSticky(fitHeight({ ...sticky, bbox, width }, measureAt));
 };
@@ -185,6 +216,8 @@ export const paintSticky = (
     { x: rect.x + pad * zoom, y: rect.y + pad * zoom },
     font * zoom,
     rgbHex(sticky.rgb),
+    sticky,
+    sticky.href !== undefined,
   );
   ctx.restore();
 };

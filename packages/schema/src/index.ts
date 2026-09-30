@@ -6,4 +6,5 @@ export * from "./model";
 export * from "./shape";
 export * from "./sticky";
 export * from "./style";
+export * from "./text-style";
 export * from "./width";

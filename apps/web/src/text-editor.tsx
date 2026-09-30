@@ -2,11 +2,11 @@ import { MAX_STICKY_BYTES } from "@stallion/schema";
 import type { RefObject } from "preact";
 import { useEffect, useLayoutEffect, useRef } from "preact/hooks";
 import type { TextEdit } from "./surface";
-import { FONT_FAMILY } from "./wrap";
+import { canvasFont } from "./wrap";
 
 export const KEYBOARD_GAP_PX = 12;
 
-const DONE_ROW_PX = 52;
+export const DONE_ROW_PX = 52;
 
 const OVERLAYS = [".toolbar", ".presence-floater"];
 
@@ -53,6 +53,21 @@ type TextEditorProps = {
   onInput: (text: string) => void;
   onDone: () => void;
   onPan: (dx: number, dy: number) => void;
+  onToggle: (key: "bold" | "italic") => void;
+};
+
+export const styleKey = (event: {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}): "bold" | "italic" | undefined => {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return undefined;
+  const key = event.key.toLowerCase();
+  if (key === "b") return "bold";
+  if (key === "i") return "italic";
+  return undefined;
 };
 
 export const openEditor = (area: HTMLTextAreaElement | null, text: string): void => {
@@ -63,7 +78,7 @@ export const openEditor = (area: HTMLTextAreaElement | null, text: string): void
   area.setSelectionRange(end, end);
 };
 
-export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditorProps) {
+export function TextEditor({ edit, areaRef, onInput, onDone, onPan, onToggle }: TextEditorProps) {
   const latest = useRef(edit);
   const panned = useRef({ from: edit?.top, by: 0 });
   latest.current = edit;
@@ -135,7 +150,8 @@ export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditor
         tabIndex={edit ? 0 : -1}
         style={
           edit && {
-            font: `${edit.fontPx}px ${FONT_FAMILY}`,
+            font: canvasFont(edit.fontPx, edit.face),
+            textDecoration: edit.underline ? "underline" : "none",
             lineHeight: `${edit.lineHeightPx}px`,
             padding: `${edit.padPx}px`,
             color: edit.ink,
@@ -151,6 +167,10 @@ export function TextEditor({ edit, areaRef, onInput, onDone, onPan }: TextEditor
         onBlur={onDone}
         onKeyDown={(event) => {
           if (event.key === "Escape") event.currentTarget.blur();
+          const toggle = styleKey(event);
+          if (!toggle) return;
+          event.preventDefault();
+          onToggle(toggle);
         }}
       />
       {edit && (

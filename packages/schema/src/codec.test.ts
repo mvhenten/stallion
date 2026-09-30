@@ -7,6 +7,7 @@ import { stallionObject } from "./model";
 import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
 import { clampUtf8, utf8Length } from "./sticky";
 import { STROKE_STYLES } from "./style";
+import { MAX_HREF_BYTES, parseHref } from "./text-style";
 
 const stroke: StallionObject = {
   type: "Stroke",
@@ -41,7 +42,7 @@ const shape: StallionObject = {
   fill: "Tint",
 };
 
-const sticky: StallionObject = {
+const legacySticky = {
   type: "Sticky",
   objectId: "sticky-0001",
   nativeZoom: 1,
@@ -50,9 +51,17 @@ const sticky: StallionObject = {
   background: 0xf76b15,
   width: 18,
   text: "Buy milk\nand a very long line that wraps",
+} as const;
+
+const sticky: StallionObject = {
+  ...legacySticky,
+  font: "Hand",
+  bold: true,
+  italic: false,
+  fit: "Auto",
 };
 
-const text: StallionObject = {
+const legacyText = {
   type: "Text",
   objectId: "text-0001",
   nativeZoom: -2,
@@ -61,6 +70,15 @@ const text: StallionObject = {
   width: 24,
   wrapWidth: 160,
   text: "Plain text that wraps\nover lines",
+} as const;
+
+const text: StallionObject = {
+  ...legacyText,
+  font: "Serif",
+  bold: true,
+  italic: true,
+  href: "https://example.com/a?b=c#d",
+  fit: "Fixed",
 };
 
 const objects: StallionObject[] = [stroke, shape, sticky, text];
@@ -93,11 +111,55 @@ test("matches the golden shape fixture", async () => {
 });
 
 test("matches the golden sticky fixture", async () => {
-  await expect(hex(encode(sticky))).toMatchFileSnapshot("../fixtures/sticky.cbor.hex");
+  await expect(hex(encode(sticky))).toMatchFileSnapshot("../fixtures/sticky-v2.cbor.hex");
 });
 
 test("matches the golden text fixture", async () => {
-  await expect(hex(encode(text))).toMatchFileSnapshot("../fixtures/text.cbor.hex");
+  await expect(hex(encode(text))).toMatchFileSnapshot("../fixtures/text-v2.cbor.hex");
+});
+
+const fixtureBytes = (name: string): Uint8Array => {
+  const text = readFileSync(new URL(`../fixtures/${name}`, import.meta.url), "utf8");
+  return Uint8Array.from(text.trim().match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+};
+
+const PLAIN = { font: "Sans", bold: false, italic: false, fit: "Fixed" } as const;
+
+test.each([
+  ["sticky.cbor.hex", legacySticky],
+  ["text.cbor.hex", legacyText],
+])("decodes the pre-style %s with the default face and writes it back", (name, legacy) => {
+  const decoded = decode(fixtureBytes(name));
+  expect(decoded).toEqual({ ok: true, value: { ...legacy, ...PLAIN } });
+  expect(raw.decode(fixtureBytes(name))).not.toHaveProperty("font");
+  expect(raw.decode(encode(legacy as unknown as StallionObject))).toEqual({ ...legacy, ...PLAIN });
+});
+
+test("round-trips a text without a link", () => {
+  const { href: _href, ...unlinked } = text as Extract<StallionObject, { type: "Text" }>;
+  expect(decode(encode(unlinked))).toEqual({ ok: true, value: unlinked });
+});
+
+test.each([
+  ["example.com/page", "https://example.com/page"],
+  [" http://Example.com ", "http://example.com/"],
+  ["https://example.com/a b", "https://example.com/a%20b"],
+  ["https://exämple.com/", "https://xn--exmple-cua.com/"],
+])("parses the link %s as %s", (input, href) => {
+  expect(parseHref(input)).toBe(href);
+});
+
+test.each([
+  "",
+  "javascript:alert(1)",
+  "mailto:someone@example.com",
+  "ftp://example.com/",
+  "https://",
+  "bad link",
+  "localhostish",
+  `https://example.com/${"a".repeat(MAX_HREF_BYTES)}`,
+])("refuses the link %j", (input) => {
+  expect(parseHref(input)).toBeUndefined();
 });
 
 test("round-trips an empty sticky", () => {
@@ -167,6 +229,16 @@ test.each([
   ["a text wrap width of zero", { ...text, wrapWidth: 0 }],
   ["a text wrap width wider than its tile", { ...text, wrapWidth: 256.5 }],
   ["a text font above 96", { ...text, width: 97 }],
+  ["an unknown font", { ...text, font: "Comic" }],
+  ["a bold that is not a boolean", { ...sticky, bold: 1 }],
+  ["an unknown fit", { ...sticky, fit: "Grow" }],
+  ["a javascript link", { ...text, href: "javascript:alert(1)" }],
+  ["a link without a host", { ...text, href: "https://" }],
+  ["a link with a space", { ...text, href: "https://example.com/a b" }],
+  ["a link with an encoded host", { ...text, href: "https://bad%20link/" }],
+  ["a link with a user", { ...text, href: "https://user@example.com/" }],
+  ["a link over 2048 bytes", { ...text, href: `https://example.com/${"a".repeat(2048)}` }],
+  ["a sticky with a mailto link", { ...sticky, href: "mailto:someone@example.com" }],
 ])("rejects %s", (_, invalid) => {
   expect(stallionObject.safeParse(invalid).success).toBe(false);
   expect(decode(raw.encode(invalid))).toMatchObject({ ok: false });

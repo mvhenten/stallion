@@ -1,7 +1,16 @@
-import { MAX_WIDTH, MIN_WIDTH } from "@stallion/schema";
+import { MAX_WIDTH, MIN_WIDTH, type TextFont, type TextStyle } from "@stallion/schema";
 import { strokeWorldWidth } from "./stroke";
 
-export const FONT_FAMILY = "system-ui, sans-serif";
+export const FONT_STACKS: Readonly<Record<TextFont, string>> = {
+  Sans: "system-ui, Helvetica, Arial, sans-serif",
+  Serif: 'Georgia, "Times New Roman", Times, serif',
+  Mono: 'Menlo, Consolas, "DejaVu Sans Mono", monospace',
+  Hand: '"Comic Sans MS", "Chalkboard SE", "Comic Neue", "Segoe Print", cursive',
+};
+
+export type Face = Pick<TextStyle, "font" | "bold" | "italic">;
+
+export const PLAIN_FACE: Face = { font: "Sans", bold: false, italic: false };
 
 export const LINE_HEIGHT = 1.3;
 
@@ -11,14 +20,24 @@ const MEASURE_PX = 100;
 
 export type Measure = (text: string) => number;
 
-export const canvasFont = (px: number): string => `${px}px ${FONT_FAMILY}`;
+export type MeasureAt = (px: number, face: Face) => Measure;
+
+export const canvasFont = (px: number, face: Face = PLAIN_FACE): string =>
+  `${face.italic ? "italic " : ""}${face.bold ? "bold " : ""}${px}px ${FONT_STACKS[face.font]}`;
 
 export const measureText =
-  (ctx: CanvasRenderingContext2D, px: number): Measure =>
+  (ctx: CanvasRenderingContext2D, px: number, face: Face): Measure =>
   (text) => {
-    ctx.font = canvasFont(px);
+    ctx.font = canvasFont(px, face);
     return ctx.measureText(text).width;
   };
+
+export const faceOf = ({ font, bold, italic }: Face): Face => ({ font, bold, italic });
+
+export const measureIn =
+  (measureAt: MeasureAt, face: Face): ((px: number) => Measure) =>
+  (px) =>
+    measureAt(px, face);
 
 const breakWord = (word: string, maxWidth: number, measure: Measure): string[] => {
   const pieces: string[] = [];
@@ -80,18 +99,32 @@ export const clampFont = (width: number): number => Math.min(MAX_WIDTH, Math.max
 export const fontForScreen = (px: number, nativeZoom: number, zoom: number): number =>
   clampFont(px / strokeWorldWidth(1, nativeZoom) / zoom);
 
+export const UNDERLINE_EM = 0.55;
+
 export const paintLines = (
   ctx: CanvasRenderingContext2D,
   lines: readonly string[],
   origin: { x: number; y: number },
   px: number,
   colour: string,
+  face: Face = PLAIN_FACE,
+  underline = false,
 ): void => {
   if (px < MIN_TEXT_PX) return;
   ctx.fillStyle = colour;
-  ctx.font = canvasFont(px);
+  ctx.font = canvasFont(px, face);
   ctx.textBaseline = "middle";
+  const thickness = Math.max(1, px / 14);
   lines.forEach((line, index) => {
-    ctx.fillText(line, origin.x, origin.y + (index + 0.5) * LINE_HEIGHT * px);
+    const middle = origin.y + (index + 0.5) * LINE_HEIGHT * px;
+    ctx.fillText(line, origin.x, middle);
+    if (underline && line !== "") {
+      ctx.fillRect(
+        origin.x,
+        middle + px * UNDERLINE_EM - thickness,
+        ctx.measureText(line).width,
+        thickness,
+      );
+    }
   });
 };

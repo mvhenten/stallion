@@ -24,6 +24,8 @@ import {
   type Stroke,
   type StrokeStyle,
   type Text,
+  type TextStyle,
+  textStyleOf,
 } from "@stallion/schema";
 import { Gesture } from "@use-gesture/vanilla";
 import {
@@ -74,6 +76,7 @@ import {
 } from "./shape";
 import {
   paintSticky,
+  restyleSticky,
   scaleSticky,
   startSticky,
   stickyLines,
@@ -101,6 +104,7 @@ import {
 import type { DrawingSource } from "./sync";
 import {
   paintText,
+  restyleText,
   scaleText,
   startText,
   textInkBox,
@@ -108,7 +112,16 @@ import {
   translateText,
   withTextContent,
 } from "./text";
-import { LINE_HEIGHT, type Measure, measureText, worldFont } from "./wrap";
+import type { TextChange } from "./text-change";
+import {
+  type Face,
+  faceOf,
+  LINE_HEIGHT,
+  type MeasureAt,
+  MIN_TEXT_PX,
+  measureText,
+  worldFont,
+} from "./wrap";
 
 export type ToolMode = "Pencil" | "Shape" | "Sticky" | "Text" | "Pan" | "Eraser" | "Select";
 
@@ -143,7 +156,7 @@ const translate = (
   entry: Entry,
   dx: number,
   dy: number,
-  measureAt: (px: number) => Measure,
+  measureAt: MeasureAt,
 ): StoredObject | undefined => {
   if (entry.type === "Sticky") return translateSticky(entry.object, dx, dy);
   if (entry.type === "Text") return translateText(entry.tile, entry.object, dx, dy, measureAt);
@@ -152,7 +165,7 @@ const translate = (
     : translateShape(entry.tile, entry.object, dx, dy);
 };
 
-type Drag = { objectId: string; from: Point; dx: number; dy: number };
+type Drag = { objectId: string; from: Point; dx: number; dy: number; href: string | undefined };
 
 const extent = (entry: Entry): BBox => {
   if (entry.type === "Stroke") return strokeExtent(entry.tile, entry.object);
@@ -166,11 +179,7 @@ const extent = (entry: Entry): BBox => {
   };
 };
 
-const scale = (
-  entry: Entry,
-  by: Scale,
-  measureAt: (px: number) => Measure,
-): StoredObject | undefined => {
+const scale = (entry: Entry, by: Scale, measureAt: MeasureAt): StoredObject | undefined => {
   if (entry.type === "Sticky") return scaleSticky(entry.object, by, measureAt);
   if (entry.type === "Text") return scaleText(entry.object, by, measureAt);
   return entry.type === "Stroke"
@@ -269,6 +278,12 @@ const SELECTION = "#0090ff";
 
 const SELECTION_DASH = [4, 4];
 
+export const LINK_GLYPH_PX = 18;
+
+export const LINK_HIT_PX = 44;
+
+const LINK_INSET_PX = 14;
+
 export const HINT_GREY = "#8c8c8c";
 
 const BLOCKED_TOUCH_EVENTS = [
@@ -351,7 +366,24 @@ export type TextEdit = {
   fontPx: number;
   padPx: number;
   lineHeightPx: number;
+  face: Face;
+  underline: boolean;
 };
+
+export type ScreenBox = { left: number; top: number; right: number; bottom: number };
+
+export type TextTarget = {
+  objectId: string;
+  kind: "Sticky" | "Text";
+  style: TextStyle;
+  href: string | undefined;
+  width: number;
+  sizePx: number;
+  rect: ScreenBox;
+  editing: boolean;
+};
+
+const targetKey = (target: TextTarget | undefined): string => JSON.stringify(target ?? null);
 
 const sameEdit = (a: TextEdit | undefined, b: TextEdit | undefined): boolean =>
   a === b ||
@@ -364,7 +396,13 @@ const sameEdit = (a: TextEdit | undefined, b: TextEdit | undefined): boolean =>
     a.top === b.top &&
     a.width === b.width &&
     a.height === b.height &&
-    a.fontPx === b.fontPx);
+    a.fontPx === b.fontPx &&
+    a.padPx === b.padPx &&
+    a.lineHeightPx === b.lineHeightPx &&
+    a.face.font === b.face.font &&
+    a.face.bold === b.face.bold &&
+    a.face.italic === b.face.italic &&
+    a.underline === b.underline);
 
 export type Surface = {
   zoomToLevel(level: number): void;
@@ -375,6 +413,7 @@ export type Surface = {
   jumpTo(objectId: string): void;
   highlight(objectId: string | undefined): void;
   finishEdit(): void;
+  styleText(change: TextChange): void;
   panBy(dx: number, dy: number): void;
   dispose(): void;
 };
@@ -390,6 +429,7 @@ export function createSurface(
   onCommit: () => void = () => undefined,
   onPresence: (presence: Presence) => void = () => undefined,
   onEdit: (edit: TextEdit | undefined) => void = () => undefined,
+  onTarget: (target: TextTarget | undefined) => void = () => undefined,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -407,6 +447,8 @@ export function createSurface(
   let press: { mode: "Sticky" | "Text"; point: Point; secondary: boolean } | undefined;
   let editing: { objectId: string; text: string; pending: Entry | undefined } | undefined;
   let reportedEdit: TextEdit | undefined;
+  let reportedTarget = targetKey(undefined);
+  let liveFit: { source: Sticky | Text; text: string; result: Sticky | Text } | undefined;
   let spaceDown = false;
   let frame = 0;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -581,12 +623,133 @@ export function createSurface(
         rgbHex(shapeDraft.rgb),
       );
     }
+    renderLinks(dpr);
     renderSelection(dpr);
     renderLocators(dpr);
     renderPreviewed(dpr);
     if (cursors.length > 0) renderCursors(dpr);
     ctx.restore();
     reportEdit();
+    reportTarget();
+  };
+
+  const liveObject = (entry: Entry & { object: Sticky | Text }): Sticky | Text => {
+    const { object } = entry;
+    if (object.fit !== "Auto" || editing?.objectId !== object.objectId) return object;
+    const { text } = editing;
+    if (text === object.text) return object;
+    if (liveFit?.source === object && liveFit.text === text) return liveFit.result;
+    const stored =
+      object.type === "Sticky"
+        ? withText(object, text, measureAt)
+        : withTextContent(entry.tile, object, text, measureAt);
+    const next = stored?.object;
+    const result = next?.type === "Sticky" || next?.type === "Text" ? next : object;
+    liveFit = { source: object, text, result };
+    return result;
+  };
+
+  const targetEntry = (): Entry | undefined => {
+    if (!editing) return selectedEntry();
+    if (resizing?.objectId === editing.objectId && resizing.preview) return resizing.preview;
+    return entries.get(editing.objectId) ?? editing.pending;
+  };
+
+  const targetOf = (): TextTarget | undefined => {
+    const entry = targetEntry();
+    if (!isWritable(entry)) return undefined;
+    const object = liveObject(entry);
+    const offset = drag?.objectId === object.objectId ? drag : { dx: 0, dy: 0 };
+    const box = onScreen(object.bbox, offset);
+    const rect = canvas.getBoundingClientRect();
+    return {
+      objectId: object.objectId,
+      kind: object.type,
+      style: textStyleOf(object),
+      href: object.href,
+      width: object.width,
+      sizePx: worldFont(object) * camera.zoom,
+      rect: {
+        left: rect.left + box.minX,
+        top: rect.top + box.minY,
+        right: rect.left + box.maxX,
+        bottom: rect.top + box.maxY,
+      },
+      editing: editing?.objectId === object.objectId,
+    };
+  };
+
+  const reportTarget = () => {
+    const next = targetOf();
+    const key = targetKey(next);
+    if (key === reportedTarget) return;
+    reportedTarget = key;
+    onTarget(next);
+  };
+
+  const linkGlyph = (entry: Entry): Point | undefined => {
+    if (!isWritable(entry) || entry.object.href === undefined) return undefined;
+    if (editing?.objectId === entry.object.objectId) return undefined;
+    const font = worldFont(entry.object) * camera.zoom;
+    if (font < MIN_TEXT_PX) return undefined;
+    const offset = drag?.objectId === entry.object.objectId ? drag : { dx: 0, dy: 0 };
+    if (entry.type === "Sticky") {
+      const box = onScreen(entry.object.bbox, offset);
+      if (box.maxX - box.minX < LINK_INSET_PX * 3) return undefined;
+      return { x: box.maxX - LINK_INSET_PX, y: box.minY + LINK_INSET_PX };
+    }
+    if (entry.type !== "Text") return undefined;
+    const ink = onScreen(entry.ink, offset);
+    return { x: ink.maxX + LINK_INSET_PX, y: ink.minY + (font * LINE_HEIGHT) / 2 };
+  };
+
+  const linkAt = (screen: Point): Entry | undefined =>
+    ordered.findLast((entry) => {
+      const glyph = linkGlyph(entry);
+      return (
+        glyph !== undefined &&
+        Math.abs(screen.x - glyph.x) <= LINK_HIT_PX / 2 &&
+        Math.abs(screen.y - glyph.y) <= LINK_HIT_PX / 2
+      );
+    });
+
+  const renderLinks = (dpr: number) => {
+    const screen = inflate(screenBounds(), LINK_GLYPH_PX);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (const original of ordered) {
+      const entry =
+        resizing?.objectId === original.object.objectId && resizing.preview
+          ? resizing.preview
+          : original;
+      const glyph = linkGlyph(entry);
+      if (!glyph) continue;
+      if (
+        glyph.x < screen.minX ||
+        glyph.x > screen.maxX ||
+        glyph.y < screen.minY ||
+        glyph.y > screen.maxY
+      )
+        continue;
+      ctx.setTransform(dpr, 0, 0, dpr, glyph.x * dpr, glyph.y * dpr);
+      ctx.fillStyle = SELECTION;
+      ctx.beginPath();
+      ctx.arc(0, 0, LINK_GLYPH_PX / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = PAPER;
+      ctx.lineWidth = 1.75;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(-3.5, 3.5);
+      ctx.lineTo(3.5, -3.5);
+      ctx.moveTo(-1.5, -3.5);
+      ctx.lineTo(3.5, -3.5);
+      ctx.lineTo(3.5, 1.5);
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   };
 
   const editOf = (): TextEdit | undefined => {
@@ -596,7 +759,7 @@ export function createSurface(
       resizing?.objectId === editing.objectId && resizing.preview ? resizing.preview : original;
     if (!isWritable(entry)) return undefined;
     const { dx, dy } = drag?.objectId === editing.objectId ? drag : { dx: 0, dy: 0 };
-    const { object } = entry;
+    const object = liveObject(entry);
     const { bbox } = object;
     const rect = canvas.getBoundingClientRect();
     const topLeft = worldToScreen(camera, { x: bbox.minX + dx, y: bbox.minY + dy });
@@ -608,6 +771,8 @@ export function createSurface(
       top: rect.top + topLeft.y,
       width: (bbox.maxX - bbox.minX) * camera.zoom,
       height: (bbox.maxY - bbox.minY) * camera.zoom,
+      face: faceOf(object),
+      underline: object.href !== undefined,
     };
     if (object.type === "Text") {
       const font = worldFont(object) * camera.zoom;
@@ -675,6 +840,7 @@ export function createSurface(
       commitEdit(withText(entry.object, text, measureAt));
     }
     finishText(entry, text);
+    if (pending) selected = objectId;
     reportEdit();
     requestRender();
   };
@@ -898,7 +1064,27 @@ export function createSurface(
     publishViewport();
   };
 
-  const measureAt = (px: number): Measure => measureText(ctx, px);
+  const measureAt: MeasureAt = (px, face) => measureText(ctx, px, face);
+
+  const styleText = (change: TextChange) => {
+    const objectId = editing?.objectId ?? selected;
+    if (objectId === undefined) return;
+    const pending =
+      editing?.objectId === objectId && !entries.has(objectId) ? editing.pending : undefined;
+    const entry = entries.get(objectId) ?? pending;
+    if (!isWritable(entry)) return;
+    const stored =
+      entry.type === "Sticky"
+        ? restyleSticky(entry.object, change, measureAt)
+        : restyleText(entry.tile, entry.object, change, measureAt);
+    if (!stored) return;
+    if (pending && editing) {
+      editing = { ...editing, pending: entryOf(stored) };
+      requestRender();
+      return;
+    }
+    commitEdit(stored);
+  };
 
   const entryOf = ({ tile, object }: StoredObject): Entry | undefined => {
     if (object.type === "Sticky") {
@@ -962,13 +1148,15 @@ export function createSurface(
   };
 
   const startDrag = (screen: Point) => {
-    const hit = pick(screen);
+    const link = linkAt(screen);
+    const hit = link ?? pick(screen);
     selected = hit?.object.objectId;
     drag = hit && {
       objectId: hit.object.objectId,
       from: screenToWorld(camera, screen),
       dx: 0,
       dy: 0,
+      href: link && isWritable(link) ? link.object.href : undefined,
     };
   };
 
@@ -983,7 +1171,12 @@ export function createSurface(
     drag = undefined;
     const entry = moved && entries.get(moved.objectId);
     if (!moved || !entry) return;
-    if (isWritable(entry) && Math.hypot(moved.dx, moved.dy) * camera.zoom < DRAG_THRESHOLD_PX) {
+    const tapped = Math.hypot(moved.dx, moved.dy) * camera.zoom < DRAG_THRESHOLD_PX;
+    if (tapped && moved.href !== undefined) {
+      window.open(moved.href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (isWritable(entry) && tapped) {
       startEdit(entry.object.objectId);
       return;
     }
@@ -1237,6 +1430,7 @@ export function createSurface(
         case "StartStroke": {
           finishEdit();
           const tool = currentTool();
+          if (tool.mode !== "Select") selected = undefined;
           if (tool.mode === "Sticky" || tool.mode === "Text") {
             press = { mode: tool.mode, point: effect.point, secondary: effect.secondary };
             break;
@@ -1572,9 +1766,13 @@ export function createSurface(
       follow.start(clientId);
     },
     editText(text) {
-      if (editing) editing = { ...editing, text };
+      if (!editing) return;
+      editing = { ...editing, text };
+      const entry = entries.get(editing.objectId) ?? editing.pending;
+      if (isWritable(entry) && entry.object.fit === "Auto") requestRender();
     },
     finishEdit,
+    styleText,
     panBy(dx, dy) {
       follow.stop();
       moveCamera(pan(camera, dx, dy));

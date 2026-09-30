@@ -2,6 +2,14 @@ import { z } from "zod";
 import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
 import { MAX_STICKY_BYTES, MAX_WRAP_WIDTH } from "./sticky";
 import { DEFAULT_STROKE_STYLE, STROKE_STYLES } from "./style";
+import {
+  DEFAULT_TEXT_FIT,
+  DEFAULT_TEXT_FONT,
+  HREF_PATTERN,
+  MAX_HREF_BYTES,
+  TEXT_FITS,
+  TEXT_FONTS,
+} from "./text-style";
 import { MAX_WIDTH, MIN_WIDTH } from "./width";
 
 export const objectId = z.string().regex(/^[0-9A-Za-z_-]{1,64}$/);
@@ -28,6 +36,20 @@ export const pencilSize = z.enum(["Small", "Medium", "Large"]);
 export const point = z.tuple([z.number(), z.number(), z.number().min(0).max(1)]);
 
 export const shapePoint = z.tuple([z.number(), z.number()]);
+
+export const textFont = z.enum(TEXT_FONTS).default(DEFAULT_TEXT_FONT);
+
+export const textFit = z.enum(TEXT_FITS).default(DEFAULT_TEXT_FIT);
+
+export const href = z.string().max(MAX_HREF_BYTES).regex(new RegExp(HREF_PATTERN));
+
+const textStyle = {
+  font: textFont,
+  bold: z.boolean().default(false),
+  italic: z.boolean().default(false),
+  href: href.optional(),
+  fit: textFit,
+};
 
 export const stroke = z.strictObject({
   type: z.literal("Stroke"),
@@ -67,6 +89,7 @@ export const text = z.strictObject({
   width,
   wrapWidth: z.number().gt(0).max(MAX_WRAP_WIDTH),
   text: z.string().min(1).max(MAX_STICKY_BYTES),
+  ...textStyle,
 });
 
 export const sticky = z.strictObject({
@@ -78,6 +101,7 @@ export const sticky = z.strictObject({
   background: rgb,
   width,
   text: z.string().max(MAX_STICKY_BYTES),
+  ...textStyle,
 });
 
 export const stallionObject = z.discriminatedUnion("type", [stroke, shape, text, sticky]);

@@ -1211,6 +1211,119 @@ const smokeText = async ({ browser, devices, analyser, url, dir, device }) => {
   }
 };
 
+const STYLED_TEXT = "Styled link";
+const STYLED_HREF = "example.com/stallion";
+const LINK_GLYPH_RGB = [0x00, 0x90, 0xff];
+
+const smokeTextStyle = async ({ browser, devices, analyser, url, dir }) => {
+  const label = "text style";
+  const context = await browser.newContext({ ...devices[DEVICE], colorScheme: "light" });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`${label}: ${problems[0]}`);
+  };
+  const shot = async (name, clip) => {
+    const path = join(dir, `text-style-${name}.png`);
+    const buffer = await page.screenshot(clip ? { clip } : {});
+    writeFileSync(path, buffer);
+    return { path, buffer };
+  };
+  const editor = page.locator(".sticky-editor:not(.idle) textarea");
+  const toolbar = page.getByRole("toolbar", { name: "Text", exact: true });
+  const expectFace = async (stage) => {
+    const face = await editor.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { family: style.fontFamily, weight: style.fontWeight };
+    });
+    if (!/Georgia/.test(face.family) || Number(face.weight) < 700) {
+      fail(
+        `${label}: the editor font is ${face.weight} ${face.family} ${stage}, want bold Georgia`,
+      );
+    }
+  };
+  const expectPressed = async (name, stage) => {
+    const pressed = await toolbar
+      .getByRole("button", { name, exact: true })
+      .getAttribute("aria-pressed");
+    if (pressed !== "true") fail(`${label}: ${name} is not on ${stage}`);
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    await palette.getByRole("button", { name: TEXT_COLOUR, exact: true }).tap();
+    await palette.getByRole("button", { name: "Text tool" }).tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    await page.locator(PALETTE).waitFor({ state: "hidden", timeout: 5000 });
+    const fewer = page.getByRole("button", { name: "Fewer tools" });
+    if (await fewer.isVisible()) await fewer.tap();
+    await page.waitForTimeout(300);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const at = {
+      x: Math.round(Math.max(24, viewport.width / 2 - 160)),
+      y: Math.round(viewport.height * 0.45),
+    };
+    const clip = {
+      x: at.x - 8,
+      y: at.y - 30,
+      width: Math.min(400, viewport.width - (at.x - 8)),
+      height: 90,
+    };
+    await drawWithTouch(page, [at]);
+    await editor.waitFor({ state: "visible", timeout: 5000 });
+    await page.keyboard.type(STYLED_TEXT);
+    await toolbar.waitFor({ state: "visible", timeout: 5000 });
+    await toolbar.getByRole("button", { name: "Font: Sans" }).tap();
+    await toolbar.getByRole("button", { name: "Serif font" }).tap();
+    await toolbar.getByRole("button", { name: "Bold", exact: true }).tap();
+    await page.waitForTimeout(300);
+    if (await editor.isVisible()) await expectFace("while editing");
+    const styled = await shot("styled");
+    await toolbar.getByRole("button", { name: "Link", exact: true }).tap();
+    await toolbar.getByLabel("Link address").fill(STYLED_HREF);
+    await toolbar.getByRole("button", { name: "Save" }).tap();
+    await page.waitForTimeout(800);
+    const linked = await shot("linked");
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const reloaded = await shot("reloaded", clip);
+    const text = await inkLines(analyser, reloaded.buffer, TEXT_RGB);
+    if (text.lines < 1) fail(`${label}: no text drawn after reload`);
+    const glyph = await colourRatio(analyser, reloaded.buffer, LINK_GLYPH_RGB);
+    if (glyph <= 0) fail(`${label}: no link glyph drawn after reload`);
+    const counts = await countStoredRows(page);
+    if ((counts.tiles ?? 0) === 0) fail(`${label}: no tile stored in IndexedDB after reload`);
+    await drawWithTouch(page, [{ x: at.x + 20, y: at.y }]);
+    await editor.waitFor({ state: "visible", timeout: 5000 });
+    await toolbar.waitFor({ state: "visible", timeout: 5000 });
+    const reopened = await shot("reopened");
+    const current = await editor.inputValue();
+    if (current !== STYLED_TEXT) fail(`${label}: the editor reopened with "${current}"`);
+    await expectFace("after reload");
+    if ((await toolbar.getByRole("button", { name: "Font: Serif" }).count()) !== 1) {
+      fail(`${label}: the font is not Serif after reload`);
+    }
+    await expectPressed("Bold", "after reload");
+    await expectPressed("Link", "after reload");
+    check();
+    return {
+      glyph,
+      screenshots: [styled.path, linked.path, reloaded.path, reopened.path],
+    };
+  } finally {
+    await context.close();
+  }
+};
+
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
@@ -1313,6 +1426,15 @@ const main = async () => {
       console.log(`PASS text ${device}: placed, edited to ${text.lines} lines, kept after reload`);
       for (const path of text.screenshots) console.log(`  ${path}`);
     }
+    const styled = await smokeTextStyle({
+      browser,
+      devices,
+      analyser,
+      url: siblingBoard(options.url),
+      dir,
+    });
+    console.log(`PASS text style: Serif, bold and a link kept after reload, glyph ${styled.glyph}`);
+    for (const path of styled.screenshots) console.log(`  ${path}`);
   } finally {
     await browser.close();
   }

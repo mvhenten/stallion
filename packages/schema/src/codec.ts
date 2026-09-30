@@ -3,6 +3,7 @@ import { validate } from "../generated/validate.js";
 import { withRgb } from "./colour";
 import type { StallionObject } from "./model";
 import { withStyle } from "./style";
+import { withTextStyle } from "./text-style";
 import { withWidth } from "./width";
 
 export type DecodeResult = { ok: true; value: StallionObject } | { ok: false; error: string };
@@ -10,7 +11,7 @@ export type DecodeResult = { ok: true; value: StallionObject } | { ok: false; er
 const cbor = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSize: true });
 
 const normalise = (object: StallionObject): StallionObject => {
-  if (object.type === "Sticky" || object.type === "Text") return object;
+  if (object.type === "Sticky" || object.type === "Text") return withTextStyle(object);
   return withStyle(withWidth(withRgb(object)));
 };
 

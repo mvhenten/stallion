@@ -16,11 +16,14 @@ import {
   type Surface,
   type SurfaceView,
   type TextEdit,
+  type TextTarget,
   type Tool,
   type ToolMode,
 } from "./surface";
 import { type BoardSource, type Connection, openSource, syncUrlFor } from "./sync";
-import { openEditor, TextEditor } from "./text-editor";
+import type { TextChange } from "./text-change";
+import { DONE_ROW_PX, openEditor, TextEditor } from "./text-editor";
+import { TextToolbar } from "./text-toolbar";
 import { captureThumbnail } from "./thumbnail";
 import { type HistoryState, Toolbar } from "./toolbar";
 import { loadStyle } from "./toolbar-layout";
@@ -88,6 +91,20 @@ export function Board({ boardId }: { boardId: string }) {
     if (next && next.objectId !== previous?.objectId) openEditor(editorRef.current, next.text);
     if (!next && previous) editorRef.current?.blur();
     setEdit(next);
+  }, []);
+  const [target, setTarget] = useState<TextTarget | undefined>(undefined);
+  const targetRef = useRef<TextTarget | undefined>(undefined);
+  const onTarget = useCallback((next: TextTarget | undefined) => {
+    targetRef.current = next;
+    setTarget(next);
+  }, []);
+  const styleText = useCallback((change: TextChange) => surfaceRef.current?.styleText(change), []);
+  const toggleStyle = useCallback((key: "bold" | "italic") => {
+    const current = targetRef.current?.style;
+    if (!current) return;
+    surfaceRef.current?.styleText(
+      key === "bold" ? { bold: !current.bold } : { italic: !current.italic },
+    );
   }, []);
   const editText = useCallback((text: string) => surfaceRef.current?.editText(text), []);
   const finishEdit = useCallback(() => surfaceRef.current?.finishEdit(), []);
@@ -189,6 +206,7 @@ export function Board({ boardId }: { boardId: string }) {
         scheduleThumbnail,
         setPresence,
         onEdit,
+        onTarget,
       );
       surfaceRef.current = surface;
     } catch (failure) {
@@ -206,6 +224,7 @@ export function Board({ boardId }: { boardId: string }) {
       sourceRef.current = undefined;
       setHistory(EMPTY_HISTORY);
       setPresence(NO_PRESENCE);
+      onTarget(undefined);
       surface?.finishEdit();
       surfaceRef.current = undefined;
       surface?.dispose();
@@ -215,7 +234,7 @@ export function Board({ boardId }: { boardId: string }) {
           setError(`Could not close the board: ${errorMessage(failure)}`),
         );
     };
-  }, [boardId, onEdit]);
+  }, [boardId, onEdit, onTarget]);
 
   useEffect(() => {
     const path = boardPath(boardId, name);
@@ -255,7 +274,20 @@ export function Board({ boardId }: { boardId: string }) {
         onInput={editText}
         onDone={finishEdit}
         onPan={panBy}
+        onToggle={toggleStyle}
       />
+      {target && (
+        <TextToolbar
+          key={target.objectId}
+          target={target}
+          anchor={
+            target.editing
+              ? { ...target.rect, bottom: target.rect.bottom + DONE_ROW_PX }
+              : target.rect
+          }
+          onChange={styleText}
+        />
+      )}
       <Toolbar
         tool={tool}
         onChange={setTool}
