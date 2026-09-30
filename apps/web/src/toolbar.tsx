@@ -10,7 +10,7 @@ import {
 } from "@stallion/schema";
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { LevelChip } from "./level-chip";
+import { type LevelBrowser, LevelChip } from "./level-chip";
 import { usePaletteFit } from "./palette-fit";
 import type { Presence } from "./presence";
 import { FollowPill, PresenceStrip } from "./presence-strip";
@@ -108,6 +108,7 @@ type ToolbarProps = {
   onRedo: () => void;
   view: SurfaceView;
   onLevel: (level: number) => void;
+  levels: LevelBrowser;
   shareOpen: boolean;
   onShare: () => void;
   presence: Presence;
@@ -194,6 +195,7 @@ export function Toolbar({
   onRedo,
   view,
   onLevel,
+  levels,
   shareOpen,
   onShare,
   presence,
@@ -556,6 +558,7 @@ export function Toolbar({
         level={view.level}
         contentLevels={view.contentLevels}
         onPick={onLevel}
+        browser={levels}
       />
     ),
     Connection: () => (

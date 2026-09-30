@@ -2,6 +2,7 @@ import { openBoard } from "@stallion/client-sync";
 import { PALETTE_RGB, PENCIL_PX } from "@stallion/schema";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { boardPath } from "./board-path";
+import type { LevelBrowser } from "./level-chip";
 import { myBoardsForPage, thumbnailUploader } from "./my-boards";
 import { PinPrompt } from "./pin-prompt";
 import type { Presence } from "./presence";
@@ -93,6 +94,12 @@ export function Board({ boardId }: { boardId: string }) {
   const panBy = useCallback((dx: number, dy: number) => surfaceRef.current?.panBy(dx, dy), []);
   const sourceRef = useRef<BoardSource | undefined>(undefined);
   const surfaceRef = useRef<Surface | undefined>(undefined);
+  const [levels] = useState<LevelBrowser>(() => ({
+    levelObjects: (level) => surfaceRef.current?.levelObjects(level) ?? { items: [], more: 0 },
+    preview: (objectId) => surfaceRef.current?.preview(objectId),
+    jumpTo: (objectId) => surfaceRef.current?.jumpTo(objectId),
+    highlight: (objectId) => surfaceRef.current?.highlight(objectId),
+  }));
   const toolRef = useRef(tool);
   toolRef.current = tool;
   const closeShare = useCallback(() => setShareOpen(false), []);
@@ -258,6 +265,7 @@ export function Board({ boardId }: { boardId: string }) {
         onRedo={() => sourceRef.current?.history.redo()}
         view={view}
         onLevel={(level) => surfaceRef.current?.zoomToLevel(level)}
+        levels={levels}
         shareOpen={shareOpen}
         onShare={() => setShareOpen(!shareOpen)}
         presence={presence}

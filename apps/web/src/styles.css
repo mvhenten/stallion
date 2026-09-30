@@ -317,6 +317,72 @@ body,
   background: var(--ink);
 }
 
+.level-flyout {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 240px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 2px 8px #0000001a;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+}
+
+.level-object {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font:
+    500 13px / 1.2 system-ui,
+    sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+
+.level-object:hover,
+.level-object:focus-visible {
+  border-color: var(--accent);
+  background: #0090ff1a;
+}
+
+.level-preview {
+  flex: none;
+  width: 64px;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.level-object-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.level-more {
+  padding: 6px 8px;
+  color: var(--ink);
+  opacity: 0.7;
+  font:
+    500 13px / 1 system-ui,
+    sans-serif;
+}
+
 .presence {
   position: relative;
   margin: 0;

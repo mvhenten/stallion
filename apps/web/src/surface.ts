@@ -42,6 +42,14 @@ import { hitsFrame, hitsShape, hitsStroke } from "./eraser";
 import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
 import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
+import {
+  type LevelObjects,
+  nearestFirst,
+  objectLabel,
+  PREVIEW_HEIGHT,
+  PREVIEW_WIDTH,
+  previewFit,
+} from "./level-objects";
 import { type Candidate, isSmall, locate, rings, screenRadius } from "./locator";
 import {
   displayName,
@@ -200,6 +208,58 @@ type Resize = {
 
 const SELECTION_PAD_PX = 4;
 
+const paintPreview = (ctx: CanvasRenderingContext2D, entry: Entry, dpr: number): void => {
+  const fit = previewFit(extent(entry));
+  const view: Camera = { x: fit.x, y: fit.y, zoom: fit.scale };
+  const toScreen = (world: Point): Point => worldToScreen(view, world);
+  const bounds: BBox = { minX: 0, minY: 0, maxX: PREVIEW_WIDTH, maxY: PREVIEW_HEIGHT };
+  const colour = rgbHex(colourOf(entry.object));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = PAPER;
+  ctx.fillRect(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+  if (entry.type === "Sticky") {
+    const { bbox } = entry.object;
+    paintSticky(
+      ctx,
+      entry.object,
+      entry.lines,
+      {
+        ...toScreen({ x: bbox.minX, y: bbox.minY }),
+        width: (bbox.maxX - bbox.minX) * view.zoom,
+        height: (bbox.maxY - bbox.minY) * view.zoom,
+      },
+      view.zoom,
+      true,
+      bounds,
+    );
+    return;
+  }
+  if (entry.type === "Text") {
+    const { bbox } = entry.object;
+    paintText(ctx, entry.object, entry.lines, toScreen({ x: bbox.minX, y: bbox.minY }), view.zoom);
+    return;
+  }
+  if (entry.type === "Shape") {
+    paintShape(
+      ctx,
+      shapeScreenInk(shapeLook(entry.object), entry.start, entry.end, toScreen, view.zoom),
+      colour,
+    );
+    return;
+  }
+  const { origin } = entry.frame;
+  const inkScale = entry.frame.scale * view.zoom * dpr;
+  ctx.setTransform(
+    inkScale,
+    0,
+    0,
+    inkScale,
+    (origin.x - view.x) * view.zoom * dpr,
+    (origin.y - view.y) * view.zoom * dpr,
+  );
+  paintInk(ctx, entry.ink, colour);
+};
+
 export const HANDLE_HIT_PX = 44;
 
 const HANDLE_PX = 12;
@@ -309,6 +369,10 @@ export type Surface = {
   zoomToLevel(level: number): void;
   follow(clientId: number | undefined): void;
   editText(text: string): void;
+  levelObjects(level: number): LevelObjects;
+  preview(objectId: string): string | undefined;
+  jumpTo(objectId: string): void;
+  highlight(objectId: string | undefined): void;
   finishEdit(): void;
   panBy(dx: number, dy: number): void;
   dispose(): void;
@@ -364,6 +428,8 @@ export function createSurface(
   let hover: Point | undefined;
   let candidates: Candidate[] = [];
   let rippleSince: number | undefined;
+  let previewed: string | undefined;
+  const previews = new WeakMap<Entry, string>();
 
   const size = () => ({ width: canvas.clientWidth, height: canvas.clientHeight });
 
@@ -515,6 +581,7 @@ export function createSurface(
     }
     renderSelection(dpr);
     renderLocators(dpr);
+    renderPreviewed(dpr);
     if (cursors.length > 0) renderCursors(dpr);
     ctx.restore();
     reportEdit();
@@ -780,6 +847,24 @@ export function createSurface(
     const rippling = rippleSince !== undefined;
     hover = point;
     if (rippling || liveLocators().length > 0) requestRender();
+  };
+
+  const renderPreviewed = (dpr: number) => {
+    const entry = previewed === undefined ? undefined : entries.get(previewed);
+    if (!entry) return;
+    const box = inflate(onScreen(entry.object.bbox, { dx: 0, dy: 0 }), SELECTION_PAD_PX);
+    const screen = screenBounds();
+    if (
+      box.maxX < screen.minX ||
+      box.minX > screen.maxX ||
+      box.maxY < screen.minY ||
+      box.minY > screen.maxY
+    )
+      return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.strokeStyle = SELECTION;
+    ctx.lineWidth = 1;
+    strokeBox(box, SELECTION_DASH);
   };
 
   const renderCursors = (dpr: number) => {
@@ -1263,6 +1348,81 @@ export function createSurface(
     animation = requestAnimationFrame(step);
   };
 
+  const levelObjects = (level: number): LevelObjects => {
+    const { width, height } = size();
+    const centre = screenToWorld(camera, { x: width / 2, y: height / 2 });
+    const { items, more } = nearestFirst(
+      ordered
+        .filter((entry) => entry.object.nativeZoom === level)
+        .map((entry) => ({ objectId: entry.object.objectId, bbox: entry.object.bbox, entry })),
+      centre,
+    );
+    return {
+      items: items.map(({ objectId, bbox, entry }) => ({
+        objectId,
+        bbox,
+        label: objectLabel(entry.object),
+      })),
+      more,
+    };
+  };
+
+  const preview = (objectId: string): string | undefined => {
+    const entry = entries.get(objectId);
+    if (!entry) return undefined;
+    const cached = previews.get(entry);
+    if (cached) return cached;
+    const dpr = window.devicePixelRatio || 1;
+    const offscreen = document.createElement("canvas");
+    offscreen.width = Math.round(PREVIEW_WIDTH * dpr);
+    offscreen.height = Math.round(PREVIEW_HEIGHT * dpr);
+    const previewCtx = offscreen.getContext("2d");
+    if (!previewCtx) return undefined;
+    paintPreview(previewCtx, entry, dpr);
+    const url = offscreen.toDataURL("image/png");
+    previews.set(entry, url);
+    return url;
+  };
+
+  const jumpTo = (objectId: string) => {
+    const entry = entries.get(objectId);
+    if (!entry) return;
+    follow.stop();
+    stopAnimation();
+    previewed = undefined;
+    const from = camera;
+    const { width, height } = size();
+    const start = screenToWorld(from, { x: width / 2, y: height / 2 });
+    const end = bboxCentre(entry.object.bbox);
+    const target = zoomForLevel(entry.object.nativeZoom);
+    const at = (t: number): Camera => {
+      const zoom = from.zoom * (target / from.zoom) ** t;
+      return {
+        x: start.x + (end.x - start.x) * t - width / 2 / zoom,
+        y: start.y + (end.y - start.y) * t - height / 2 / zoom,
+        zoom,
+      };
+    };
+    const started = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - started) / LEVEL_ANIMATION_MS);
+      moveCamera(at(easeOut(t)));
+      if (t < 1) {
+        animation = requestAnimationFrame(step);
+        return;
+      }
+      animation = 0;
+      moveCamera(at(1));
+    };
+    animation = requestAnimationFrame(step);
+  };
+
+  const highlight = (objectId: string | undefined) => {
+    if (previewed === objectId) return;
+    previewed = objectId;
+    requestRender();
+  };
+
   const isPointerEvent = (event: Event): event is PointerEvent => "pointerId" in event;
 
   const onDrag = ({ event, intentional }: { event: Event; intentional: boolean }) => {
@@ -1395,6 +1555,10 @@ export function createSurface(
 
   return {
     zoomToLevel,
+    levelObjects,
+    preview,
+    jumpTo,
+    highlight,
     follow(clientId) {
       if (clientId === undefined || clientId === follow.target) {
         follow.stop();
