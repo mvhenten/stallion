@@ -42,6 +42,7 @@ import { hitsFrame, hitsShape, hitsStroke } from "./eraser";
 import { createFollow } from "./follow";
 import { createInput, DRAG_THRESHOLD_PX, type Effect, PENDING_MS, type PointerKind } from "./input";
 import { easeOut, LEVEL_ANIMATION_MS, levelOf, zoomForLevel } from "./level";
+import { type Candidate, isSmall, locate, rings, screenRadius } from "./locator";
 import {
   displayName,
   PRESENCE_THROTTLE_MS,
@@ -360,6 +361,9 @@ export function createSurface(
   const reader = createInkReader();
   const landed = new Set<string>();
   let inks: LiveInk[] = [];
+  let hover: Point | undefined;
+  let candidates: Candidate[] = [];
+  let rippleSince: number | undefined;
 
   const size = () => ({ width: canvas.clientWidth, height: canvas.clientHeight });
 
@@ -395,6 +399,8 @@ export function createSurface(
       y: (world.y - camera.y) * camera.zoom * dpr,
     });
     const markers: Marker[] = [];
+    const locating = currentTool().mode === "Select";
+    candidates = [];
     for (const original of ordered) {
       const resized =
         resizing?.objectId === original.object.objectId ? resizing.preview : undefined;
@@ -403,6 +409,12 @@ export function createSurface(
       const culled = dragged || resized ? "Draw" : cull(entry.object.bbox, view, camera.zoom);
       if (culled === "Skip") continue;
       const colour = rgbHex(colourOf(entry.object));
+      const radius =
+        locating && !dragged && !resized && screenRadius(entry.object.bbox, camera.zoom);
+      if (radius && isSmall(radius)) {
+        const centre = worldToScreen(camera, bboxCentre(entry.object.bbox));
+        candidates.push({ ...centre, radius, style: colour });
+      }
       if (culled === "Marker") {
         markers.push({ ...toDevice(bboxCentre(entry.object.bbox)), style: colour });
         continue;
@@ -502,6 +514,7 @@ export function createSurface(
       );
     }
     renderSelection(dpr);
+    renderLocators(dpr);
     if (cursors.length > 0) renderCursors(dpr);
     ctx.restore();
     reportEdit();
@@ -734,6 +747,39 @@ export function createSurface(
       ctx.fillRect(x - HANDLE_PX / 2, y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
       ctx.strokeRect(x - HANDLE_PX / 2, y - HANDLE_PX / 2, HANDLE_PX, HANDLE_PX);
     }
+  };
+
+  const liveLocators = () =>
+    hover && !drag && !resizing && currentTool().mode === "Select" ? locate(candidates, hover) : [];
+
+  const renderLocators = (dpr: number) => {
+    const live = liveLocators();
+    if (live.length === 0) {
+      rippleSince = undefined;
+      return;
+    }
+    const now = performance.now();
+    rippleSince ??= now;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineWidth = 2;
+    for (const locator of live) {
+      ctx.strokeStyle = locator.style;
+      for (const ring of rings(locator, now - rippleSince)) {
+        if (ring.alpha <= 0) continue;
+        ctx.globalAlpha = ring.alpha;
+        ctx.beginPath();
+        ctx.arc(locator.x, locator.y, ring.radius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1;
+    requestRender();
+  };
+
+  const hoverAt = (point: Point | undefined) => {
+    const rippling = rippleSince !== undefined;
+    hover = point;
+    if (rippling || liveLocators().length > 0) requestRender();
   };
 
   const renderCursors = (dpr: number) => {
@@ -1279,7 +1325,11 @@ export function createSurface(
     moveCamera(zoomAt(camera, localPoint(event), factor));
   };
 
-  const onPointerMove = (event: PointerEvent) => shareCursor(localPoint(event));
+  const onPointerMove = (event: PointerEvent) => {
+    const point = localPoint(event);
+    shareCursor(point);
+    hoverAt(event.pointerType !== "touch" && event.buttons === 0 ? point : undefined);
+  };
 
   const onKey = (event: KeyboardEvent) => {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
@@ -1298,7 +1348,10 @@ export function createSurface(
     spaceDown = event.type === "keydown";
   };
 
-  const onPointerLeave = () => shareCursor(undefined);
+  const onPointerLeave = () => {
+    shareCursor(undefined);
+    hoverAt(undefined);
+  };
 
   const preventDefault = (event: Event) => event.preventDefault();
 
