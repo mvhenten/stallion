@@ -2,6 +2,7 @@ import { Encoder } from "cbor-x";
 import { validate } from "../generated/validate.js";
 import { withRgb } from "./colour";
 import type { StallionObject } from "./model";
+import { withShapePaint } from "./shape";
 import { withStyle } from "./style";
 import { withTextStyle } from "./text-style";
 import { withWidth } from "./width";
@@ -12,6 +13,7 @@ const cbor = new Encoder({ useRecords: false, mapsAsObjects: true, variableMapSi
 
 const normalise = (object: StallionObject): StallionObject => {
   if (object.type === "Sticky" || object.type === "Text") return withTextStyle(object);
+  if (object.type === "Shape") return withShapePaint(withStyle(withWidth(withRgb(object))));
   return withStyle(withWidth(withRgb(object)));
 };
 

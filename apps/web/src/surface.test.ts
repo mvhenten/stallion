@@ -3,7 +3,7 @@ import type { LiveObjects } from "@stallion/client-sync";
 import type { Shape, Stroke } from "@stallion/schema";
 import { afterEach, expect, test, vi } from "vitest";
 import { shapeBounds, shapeLook, shapeWorldPoints } from "./shape";
-import { createSurface, INK_ALPHA, PAPER, type Tool } from "./surface";
+import { type ContextTarget, createSurface, INK_ALPHA, PAPER, type Tool } from "./surface";
 import type { Awareness, DrawingSource } from "./sync";
 
 const stored: StoredObject & { object: Stroke } = {
@@ -74,6 +74,8 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
   const calls: string[] = [];
   const commits: StoredObject[] = [];
   const erased: string[] = [];
+  const targets: (ContextTarget | undefined)[] = [];
+  let checkpoints = 0;
   let tool = PENCIL;
   const context = {
     save: () => undefined,
@@ -149,7 +151,9 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     history: {
       undo: () => undefined,
       redo: () => undefined,
-      checkpoint: () => undefined,
+      checkpoint: () => {
+        checkpoints += 1;
+      },
       canUndo: false,
       canRedo: false,
       observe: () => () => undefined,
@@ -157,7 +161,17 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
     awareness,
     close: () => Promise.resolve(),
   };
-  const surface = createSurface(canvas, "board", source, () => tool);
+  const surface = createSurface(
+    canvas,
+    "board",
+    source,
+    () => tool,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (target) => targets.push(target),
+  );
   const paint = () => {
     calls.length = 0;
     for (const callback of frames.splice(0)) callback(0);
@@ -170,7 +184,7 @@ const harness = (initial: StoredObject[], awareness?: Awareness) => {
   const use = (next: Partial<Tool>) => {
     tool = { ...tool, ...next };
   };
-  return { surface, paint, arrive, use, commits, erased };
+  return { surface, paint, arrive, use, commits, erased, targets, checkpoints: () => checkpoints };
 };
 
 test("each frame paints the paper before any stroke", () => {
@@ -276,4 +290,49 @@ test("drags the bottom-right handle of a selected rectangle to double its size",
   expect(end.x).toBeCloseTo(300, 9);
   expect(end.y).toBeCloseTo(200, 9);
   expect(resized.object.bbox).toEqual(shapeBounds(shapeLook(resized.object), start, end));
+});
+
+test("restyles a selected rectangle with a fill colour, no outline and half opacity", () => {
+  const { surface, paint, arrive, use, commits, targets, checkpoints } = harness([]);
+  use({ mode: "Shape", shape: "Rectangle" });
+  dragAlong({ x: 100, y: 100 }, { x: 200, y: 150 });
+  const [drawn] = commits;
+  if (drawn?.object.type !== "Shape") throw new Error("no shape committed");
+  expect(drawn.object).toMatchObject({ outline: true, opacity: 1 });
+  expect(drawn.object).not.toHaveProperty("fillRgb");
+  arrive(drawn);
+  use({ mode: "Select" });
+  dragAlong({ x: 150, y: 100 }, { x: 150, y: 100 });
+  paint();
+  expect(targets.at(-1)).toMatchObject({ kind: "Shape", objectId: drawn.object.objectId });
+
+  surface.previewShape({ opacity: 0.25 });
+  paint();
+  expect(targets.at(-1)).toMatchObject({ kind: "Shape", opacity: 0.25 });
+  expect(commits).toHaveLength(1);
+
+  const before = checkpoints();
+  const inked = () => paint().filter((call) => !call.startsWith("fillRect"));
+  const apply = (change: Parameters<typeof surface.styleShape>[0]) => {
+    surface.styleShape(change);
+    const next = commits.at(-1);
+    if (next?.object.type !== "Shape") throw new Error("no restyle committed");
+    arrive(next);
+    return next.object;
+  };
+  expect(apply({ fillRgb: 0x30a46c })).toMatchObject({
+    fill: "Tint",
+    fillRgb: 0x30a46c,
+    opacity: 1,
+  });
+  expect(apply({ outline: false })).toMatchObject({ outline: false });
+  expect(inked()).toEqual(["fill #30a46c"]);
+  expect(apply({ opacity: 0.5 })).toMatchObject({ opacity: 0.5, bbox: drawn.object.bbox });
+  expect(inked()).toEqual(["ink #30a46c"]);
+  const bare = apply({ fill: "None" });
+  surface.dispose();
+
+  expect(bare).toMatchObject({ fill: "None", outline: true });
+  expect(bare).not.toHaveProperty("fillRgb");
+  expect(checkpoints() - before).toBe(4);
 });

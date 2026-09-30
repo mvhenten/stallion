@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SHAPE_FILLS, SHAPE_KINDS } from "./shape";
+import { DEFAULT_OPACITY, SHAPE_FILLS, SHAPE_KINDS } from "./shape";
 import { MAX_STICKY_BYTES, MAX_WRAP_WIDTH } from "./sticky";
 import { DEFAULT_STROKE_STYLE, STROKE_STYLES } from "./style";
 import {
@@ -78,6 +78,9 @@ export const shape = z.strictObject({
   start: shapePoint,
   end: shapePoint,
   fill: z.enum(SHAPE_FILLS),
+  fillRgb: rgb.optional(),
+  outline: z.boolean().default(true),
+  opacity: z.number().min(0).max(1).default(DEFAULT_OPACITY),
 });
 
 export const text = z.strictObject({

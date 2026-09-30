@@ -12,3 +12,19 @@ export const FILLABLE: Readonly<Record<ShapeKind, boolean>> = {
   Line: false,
   Arrow: false,
 };
+
+export const DEFAULT_OPACITY = 1;
+
+export type ShapePaint = { outline: boolean; opacity: number };
+
+export type ShapePaintable = { outline?: boolean | undefined; opacity?: number | undefined };
+
+export const shapePaintOf = (shape: ShapePaintable): ShapePaint => ({
+  outline: shape.outline ?? true,
+  opacity: shape.opacity ?? DEFAULT_OPACITY,
+});
+
+export const withShapePaint = <T extends ShapePaintable>(shape: T): T & ShapePaint => ({
+  ...shape,
+  ...shapePaintOf(shape),
+});

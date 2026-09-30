@@ -9,13 +9,16 @@ import {
   toTileLocal,
 } from "@stallion/geometry";
 import {
+  DEFAULT_OPACITY,
   FILLABLE,
   nearestColour,
   nearestSize,
+  rgbHex,
   type Shape,
   type ShapeFill,
   type ShapeKind,
   type StrokeStyle,
+  shapePaintOf,
   styleOf,
   widthOf,
 } from "@stallion/schema";
@@ -30,6 +33,7 @@ import {
   type Vec,
 } from "./clip";
 import {
+  clampWidth,
   dashPattern,
   HIGHLIGHTER_ALPHA,
   newObjectId,
@@ -49,6 +53,9 @@ export const arrowHeadPx = (width: number): number => width * 3 + 8;
 export type ShapeLook = {
   kind: ShapeKind;
   fill: ShapeFill;
+  fillRgb: number | undefined;
+  outline: boolean;
+  opacity: number;
   style: StrokeStyle;
   width: number;
   nativeZoom: number;
@@ -59,6 +66,9 @@ export type ShapeDraft = ShapeLook & { objectId: string; rgb: number; start: Poi
 export type ShapeInk = {
   kind: ShapeKind;
   filled: boolean;
+  fillColour: string | undefined;
+  outline: boolean;
+  opacity: number;
   style: StrokeStyle;
   start: Point;
   end: Point;
@@ -69,6 +79,8 @@ export type ShapeInk = {
 export const shapeLook = (shape: Shape): ShapeLook => ({
   kind: shape.kind,
   fill: shape.fill,
+  fillRgb: shape.fillRgb,
+  ...shapePaintOf(shape),
   style: styleOf(shape),
   width: widthOf(shape),
   nativeZoom: shape.nativeZoom,
@@ -104,6 +116,9 @@ export const startShape = (
   objectId: newObjectId(),
   kind,
   fill: FILLABLE[kind] ? fill : "None",
+  fillRgb: undefined,
+  outline: true,
+  opacity: DEFAULT_OPACITY,
   rgb,
   width,
   style,
@@ -151,6 +166,9 @@ export const finishShape = (draft: ShapeDraft): StoredObject | undefined => {
       style: draft.style,
       kind: draft.kind,
       fill: draft.fill,
+      ...(draft.fillRgb === undefined ? {} : { fillRgb: draft.fillRgb }),
+      outline: draft.outline,
+      opacity: draft.opacity,
     },
     draft,
     start,
@@ -180,6 +198,51 @@ export const scaleShape = (tile: Tile, shape: Shape, scale: Scale): StoredObject
   return placeShape(base, shapeLook(shape), scaleAbout(scale, start), scaleAbout(scale, end));
 };
 
+export type ShapeChange =
+  | { rgb: number }
+  | { fill: ShapeFill }
+  | { fillRgb: number }
+  | { outline: boolean }
+  | { opacity: number }
+  | { width: number }
+  | { style: StrokeStyle };
+
+const withFill = (shape: Shape, fill: ShapeFill, fillRgb: number | undefined): Shape => {
+  const { fillRgb: _previous, ...rest } = shape;
+  return fillRgb === undefined ? { ...rest, fill } : { ...rest, fill, fillRgb };
+};
+
+const changed = (shape: Shape, change: ShapeChange): Shape => {
+  if ("rgb" in change) return { ...shape, rgb: change.rgb, colour: nearestColour(change.rgb) };
+  if ("fill" in change) return withFill(shape, change.fill, undefined);
+  if ("fillRgb" in change) return withFill(shape, "Tint", change.fillRgb);
+  if ("opacity" in change) return { ...shape, opacity: Math.min(1, Math.max(0, change.opacity)) };
+  if ("width" in change) {
+    const width = clampWidth(change.width);
+    return { ...shape, width, size: nearestSize(width) };
+  }
+  return { ...shape, ...change };
+};
+
+export const isFilled = (shape: { kind: ShapeKind; fill: ShapeFill }): boolean =>
+  shape.fill === "Tint" && FILLABLE[shape.kind];
+
+// A shape with neither outline nor fill would vanish, so the outline comes back.
+export const applyShapeChange = (shape: Shape, change: ShapeChange): Shape => {
+  const next = changed(shape, change);
+  return next.outline || isFilled(next) ? next : { ...next, outline: true };
+};
+
+export const restyleShape = (
+  tile: Tile,
+  shape: Shape,
+  change: ShapeChange,
+): StoredObject | undefined => {
+  const { start, end } = shapeWorldPoints(tile, shape);
+  const { bbox: _bbox, start: _start, end: _end, ...base } = applyShapeChange(shape, change);
+  return placeShape(base, shapeLook({ ...shape, ...base }), start, end);
+};
+
 export const shapeScreenInk = (
   look: ShapeLook,
   start: Point,
@@ -188,7 +251,10 @@ export const shapeScreenInk = (
   zoom: number,
 ): ShapeInk => ({
   kind: look.kind,
-  filled: look.fill === "Tint" && FILLABLE[look.kind],
+  filled: isFilled(look),
+  fillColour: look.fillRgb === undefined ? undefined : rgbHex(look.fillRgb),
+  outline: look.outline || !isFilled(look),
+  opacity: look.opacity,
   style: look.style,
   start: toScreen(start),
   end: toScreen(end),
@@ -274,19 +340,30 @@ const clippedOutline = (ink: ShapeInk, bounds: BBox): ClippedOutline => {
   };
 };
 
+const setFill = (ctx: CanvasRenderingContext2D, ink: ShapeInk, base: number): void => {
+  if (ink.fillColour === undefined) {
+    ctx.globalAlpha = base * TINT_ALPHA;
+    return;
+  }
+  ctx.fillStyle = ink.fillColour;
+  ctx.globalAlpha = base;
+};
+
 const paintClippedShape = (
   ctx: CanvasRenderingContext2D,
   ink: ShapeInk,
+  colour: string,
   base: number,
   bounds: BBox,
 ): void => {
   const { fill, runs, head } = clippedOutline(ink, bounds);
   if (ink.filled) {
-    ctx.globalAlpha = base * TINT_ALPHA;
+    setFill(ctx, ink, base);
     fillPolygon(ctx, fill);
   }
   ctx.globalAlpha = base;
-  strokeRuns(ctx, runs, ink.style === "Dashed" ? dashPattern(ink.lineWidth) : []);
+  ctx.fillStyle = colour;
+  if (ink.outline) strokeRuns(ctx, runs, ink.style === "Dashed" ? dashPattern(ink.lineWidth) : []);
   fillPolygon(ctx, head);
 };
 
@@ -329,7 +406,7 @@ export const paintShape = (
   bounds?: BBox,
 ): void => {
   const highlighter = ink.style === "Highlighter";
-  const base = highlighter ? alpha * HIGHLIGHTER_ALPHA : alpha;
+  const base = (highlighter ? alpha * HIGHLIGHTER_ALPHA : alpha) * ink.opacity;
   if (highlighter) ctx.globalCompositeOperation = "multiply";
   ctx.strokeStyle = colour;
   ctx.fillStyle = colour;
@@ -337,19 +414,20 @@ export const paintShape = (
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   if (bounds) {
-    paintClippedShape(ctx, ink, base, bounds);
+    paintClippedShape(ctx, ink, colour, base, bounds);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     return;
   }
   const arrowHead = outline(ctx, ink);
   if (ink.filled) {
-    ctx.globalAlpha = base * TINT_ALPHA;
+    setFill(ctx, ink, base);
     ctx.fill();
   }
   ctx.globalAlpha = base;
+  ctx.fillStyle = colour;
   if (ink.style === "Dashed") ctx.setLineDash(dashPattern(ink.lineWidth));
-  ctx.stroke();
+  if (ink.outline) ctx.stroke();
   ctx.setLineDash([]);
   if (arrowHead) fillPolygon(ctx, headPoints(ink.end, arrowHead));
   ctx.globalAlpha = 1;

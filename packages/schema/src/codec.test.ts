@@ -26,7 +26,7 @@ const stroke: StallionObject = {
   ],
 };
 
-const shape: StallionObject = {
+const legacyShape = {
   type: "Shape",
   objectId: "shape-0001",
   nativeZoom: 0,
@@ -40,6 +40,17 @@ const shape: StallionObject = {
   start: [240.5, 12],
   end: [16, 116.25],
   fill: "Tint",
+} as const;
+
+const shape: StallionObject = {
+  ...legacyShape,
+  bbox: { ...legacyShape.bbox },
+  start: [...legacyShape.start],
+  end: [...legacyShape.end],
+  kind: "Rectangle",
+  fillRgb: 0x30a46c,
+  outline: false,
+  opacity: 0.5,
 };
 
 const legacySticky = {
@@ -107,7 +118,7 @@ test.each(SHAPE_KINDS.flatMap((kind) => SHAPE_FILLS.map((fill) => ({ kind, fill 
 );
 
 test("matches the golden shape fixture", async () => {
-  await expect(hex(encode(shape))).toMatchFileSnapshot("../fixtures/shape.cbor.hex");
+  await expect(hex(encode(shape))).toMatchFileSnapshot("../fixtures/shape-v2.cbor.hex");
 });
 
 test("matches the golden sticky fixture", async () => {
@@ -133,6 +144,22 @@ test.each([
   expect(decoded).toEqual({ ok: true, value: { ...legacy, ...PLAIN } });
   expect(raw.decode(fixtureBytes(name))).not.toHaveProperty("font");
   expect(raw.decode(encode(legacy as unknown as StallionObject))).toEqual({ ...legacy, ...PLAIN });
+});
+
+test("decodes the pre-paint shape with an outline at full opacity and writes both back", () => {
+  const decoded = decode(fixtureBytes("shape.cbor.hex"));
+  expect(decoded).toEqual({ ok: true, value: { ...legacyShape, outline: true, opacity: 1 } });
+  expect(raw.decode(fixtureBytes("shape.cbor.hex"))).not.toHaveProperty("opacity");
+  expect(raw.decode(encode(legacyShape as unknown as StallionObject))).toEqual({
+    ...legacyShape,
+    outline: true,
+    opacity: 1,
+  });
+});
+
+test("round-trips a shape with the derived tint", () => {
+  const { fillRgb: _fillRgb, ...tinted } = shape as Extract<StallionObject, { type: "Shape" }>;
+  expect(decode(encode(tinted))).toEqual({ ok: true, value: tinted });
 });
 
 test("round-trips a text without a link", () => {
@@ -218,6 +245,11 @@ test.each([
   ["a shape without an end", { ...shape, end: undefined }],
   ["a shape point with three coordinates", { ...shape, start: [1, 2, 3] }],
   ["a shape width above 96", { ...shape, width: 97 }],
+  ["a shape fill above 0xFFFFFF", { ...shape, fillRgb: 0x1000000 }],
+  ["a shape opacity above one", { ...shape, opacity: 1.5 }],
+  ["a negative shape opacity", { ...shape, opacity: -0.1 }],
+  ["a NaN shape opacity", { ...shape, opacity: Number.NaN }],
+  ["an outline that is not a boolean", { ...shape, outline: 1 }],
   ["a sticky without a background", { ...sticky, background: undefined }],
   ["a sticky background above 0xFFFFFF", { ...sticky, background: 0x1000000 }],
   ["a sticky font below 0.5", { ...sticky, width: 0.25 }],

@@ -10,13 +10,15 @@ import { loadRecents, renameRecent, saveRecents, upsertRecent } from "./recents"
 import { useConnectionNotice } from "./reconnect";
 import { ReconnectNotice } from "./reconnect-notice";
 import { errorMessage, reportLink } from "./report";
+import type { ShapeChange } from "./shape";
+import { ShapeToolbar } from "./shape-toolbar";
 import { boardLink, SharePanel } from "./share";
 import {
+  type ContextTarget,
   createSurface,
   type Surface,
   type SurfaceView,
   type TextEdit,
-  type TextTarget,
   type Tool,
   type ToolMode,
 } from "./surface";
@@ -92,18 +94,26 @@ export function Board({ boardId }: { boardId: string }) {
     if (!next && previous) editorRef.current?.blur();
     setEdit(next);
   }, []);
-  const [target, setTarget] = useState<TextTarget | undefined>(undefined);
-  const targetRef = useRef<TextTarget | undefined>(undefined);
-  const onTarget = useCallback((next: TextTarget | undefined) => {
+  const [target, setTarget] = useState<ContextTarget | undefined>(undefined);
+  const targetRef = useRef<ContextTarget | undefined>(undefined);
+  const onTarget = useCallback((next: ContextTarget | undefined) => {
     targetRef.current = next;
     setTarget(next);
   }, []);
   const styleText = useCallback((change: TextChange) => surfaceRef.current?.styleText(change), []);
+  const styleShape = useCallback(
+    (change: ShapeChange) => surfaceRef.current?.styleShape(change),
+    [],
+  );
+  const previewShape = useCallback(
+    (change: ShapeChange | undefined) => surfaceRef.current?.previewShape(change),
+    [],
+  );
   const toggleStyle = useCallback((key: "bold" | "italic") => {
-    const current = targetRef.current?.style;
-    if (!current) return;
+    const current = targetRef.current;
+    if (!current || current.kind === "Shape") return;
     surfaceRef.current?.styleText(
-      key === "bold" ? { bold: !current.bold } : { italic: !current.italic },
+      key === "bold" ? { bold: !current.style.bold } : { italic: !current.style.italic },
     );
   }, []);
   const editText = useCallback((text: string) => surfaceRef.current?.editText(text), []);
@@ -276,7 +286,16 @@ export function Board({ boardId }: { boardId: string }) {
         onPan={panBy}
         onToggle={toggleStyle}
       />
-      {target && (
+      {target?.kind === "Shape" && (
+        <ShapeToolbar
+          key={target.objectId}
+          target={target}
+          anchor={target.rect}
+          onChange={styleShape}
+          onPreview={previewShape}
+        />
+      )}
+      {target && target.kind !== "Shape" && (
         <TextToolbar
           key={target.objectId}
           target={target}

@@ -158,6 +158,9 @@ describe("level -9 on a 2880x1800 canvas", () => {
       {
         kind: "Ellipse",
         filled: true,
+        fillColour: undefined,
+        outline: true,
+        opacity: 1,
         style: "Dashed",
         start: { x: 1440 - 2 * 2.15e5, y: 900 - 1.09e5 },
         end: { x: 1440, y: 900 + 1.09e5 },

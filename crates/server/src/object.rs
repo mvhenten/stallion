@@ -10,6 +10,15 @@ pub const MAX_COLOUR: u8 = 5;
 pub const MAX_RGB: u32 = 0xFF_FFFF;
 pub const WIDTH_RANGE: std::ops::RangeInclusive<f64> = 0.5..=96.0;
 pub const MAX_HREF_BYTES: usize = 2048;
+pub const OPACITY_RANGE: std::ops::RangeInclusive<f64> = 0.0..=1.0;
+
+fn default_outline() -> bool {
+    true
+}
+
+fn default_opacity() -> f64 {
+    1.0
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -109,6 +118,12 @@ pub struct Shape {
     pub start: ShapePoint,
     pub end: ShapePoint,
     pub fill: ShapeFill,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_rgb: Option<u32>,
+    #[serde(default = "default_outline")]
+    pub outline: bool,
+    #[serde(default = "default_opacity")]
+    pub opacity: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -261,6 +276,12 @@ impl StallionObject {
                 {
                     return Err("shape start and end must be finite".into());
                 }
+                if let Some(fill) = s.fill_rgb.filter(|&fill| fill > MAX_RGB) {
+                    return Err(format!("fillRgb {fill:#x} is outside 0..0xFFFFFF"));
+                }
+                if !OPACITY_RANGE.contains(&s.opacity) {
+                    return Err(format!("opacity {} is outside 0..1", s.opacity));
+                }
                 Ok(())
             }
             StallionObject::Text(t) => {
@@ -394,6 +415,12 @@ pub(crate) mod tests {
         ))
     }
 
+    fn shape_v2_fixture() -> Vec<u8> {
+        from_hex(include_str!(
+            "../../../packages/schema/fixtures/shape-v2.cbor.hex"
+        ))
+    }
+
     fn sticky_fixture() -> Vec<u8> {
         from_hex(include_str!(
             "../../../packages/schema/fixtures/sticky.cbor.hex"
@@ -518,6 +545,9 @@ pub(crate) mod tests {
             start: (240.5, 12.0),
             end: (16.0, 116.25),
             fill: ShapeFill::Tint,
+            fill_rgb: None,
+            outline: true,
+            opacity: 1.0,
         }
     }
 
@@ -533,6 +563,65 @@ pub(crate) mod tests {
             decode(&shape_fixture()),
             Ok(StallionObject::Shape(golden_shape()))
         );
+    }
+
+    #[test]
+    fn decodes_the_painted_shape_fixture() {
+        assert_eq!(
+            decode(&shape_v2_fixture()),
+            Ok(StallionObject::Shape(Shape {
+                kind: ShapeKind::Rectangle,
+                fill_rgb: Some(0x30_A46C),
+                outline: false,
+                opacity: 0.5,
+                ..golden_shape()
+            }))
+        );
+    }
+
+    #[test]
+    fn bounds_shape_fill_colour_and_opacity() {
+        for opacity in [0.0, 1.0] {
+            let shape = StallionObject::Shape(Shape {
+                opacity,
+                fill_rgb: Some(MAX_RGB),
+                ..golden_shape()
+            });
+            assert_eq!(decode(&encode(shape.clone())), Ok(shape), "{opacity}");
+        }
+        for (shape, reason) in [
+            (
+                Shape {
+                    fill_rgb: Some(MAX_RGB + 1),
+                    ..golden_shape()
+                },
+                "fillRgb",
+            ),
+            (
+                Shape {
+                    opacity: 1.5,
+                    ..golden_shape()
+                },
+                "opacity",
+            ),
+            (
+                Shape {
+                    opacity: -0.1,
+                    ..golden_shape()
+                },
+                "opacity",
+            ),
+            (
+                Shape {
+                    opacity: f64::NAN,
+                    ..golden_shape()
+                },
+                "opacity",
+            ),
+        ] {
+            let error = decode(&encode(StallionObject::Shape(shape))).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
     }
 
     #[test]

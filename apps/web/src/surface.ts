@@ -20,6 +20,7 @@ import {
   type Shape,
   type ShapeFill,
   type ShapeKind,
+  type ShapePaint,
   type Sticky,
   type Stroke,
   type StrokeStyle,
@@ -66,6 +67,8 @@ import {
 import {
   finishShape,
   paintShape,
+  restyleShape,
+  type ShapeChange,
   type ShapeDraft,
   scaleShape,
   shapeLook,
@@ -383,7 +386,21 @@ export type TextTarget = {
   editing: boolean;
 };
 
-const targetKey = (target: TextTarget | undefined): string => JSON.stringify(target ?? null);
+export type ShapeTarget = ShapePaint & {
+  objectId: string;
+  kind: "Shape";
+  shape: ShapeKind;
+  rgb: number;
+  fill: ShapeFill;
+  fillRgb: number | undefined;
+  width: number;
+  style: StrokeStyle;
+  rect: ScreenBox;
+};
+
+export type ContextTarget = TextTarget | ShapeTarget;
+
+const targetKey = (target: ContextTarget | undefined): string => JSON.stringify(target ?? null);
 
 const sameEdit = (a: TextEdit | undefined, b: TextEdit | undefined): boolean =>
   a === b ||
@@ -414,6 +431,8 @@ export type Surface = {
   highlight(objectId: string | undefined): void;
   finishEdit(): void;
   styleText(change: TextChange): void;
+  styleShape(change: ShapeChange): void;
+  previewShape(change: ShapeChange | undefined): void;
   panBy(dx: number, dy: number): void;
   dispose(): void;
 };
@@ -429,7 +448,7 @@ export function createSurface(
   onCommit: () => void = () => undefined,
   onPresence: (presence: Presence) => void = () => undefined,
   onEdit: (edit: TextEdit | undefined) => void = () => undefined,
-  onTarget: (target: TextTarget | undefined) => void = () => undefined,
+  onTarget: (target: ContextTarget | undefined) => void = () => undefined,
 ): Surface {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("This browser cannot create a 2D canvas context.");
@@ -444,6 +463,7 @@ export function createSurface(
   let selected: string | undefined;
   let drag: Drag | undefined;
   let resizing: Resize | undefined;
+  let restyled: { base: Entry; preview: Entry } | undefined;
   let press: { mode: "Sticky" | "Text"; point: Point; secondary: boolean } | undefined;
   let editing: { objectId: string; text: string; pending: Entry | undefined } | undefined;
   let reportedEdit: TextEdit | undefined;
@@ -512,7 +532,7 @@ export function createSurface(
     candidates = [];
     for (const original of ordered) {
       const resized =
-        resizing?.objectId === original.object.objectId ? resizing.preview : undefined;
+        resizing?.objectId === original.object.objectId ? resizing.preview : restyledOf(original);
       const entry = resized ?? original;
       const dragged = drag?.objectId === entry.object.objectId ? drag : undefined;
       const culled = dragged || resized ? "Draw" : cull(entry.object.bbox, view, camera.zoom);
@@ -655,13 +675,42 @@ export function createSurface(
     return entries.get(editing.objectId) ?? editing.pending;
   };
 
-  const targetOf = (): TextTarget | undefined => {
+  const screenRect = (bbox: BBox, offset: { dx: number; dy: number }): ScreenBox => {
+    const box = onScreen(bbox, offset);
+    const rect = canvas.getBoundingClientRect();
+    return {
+      left: rect.left + box.minX,
+      top: rect.top + box.minY,
+      right: rect.left + box.maxX,
+      bottom: rect.top + box.maxY,
+    };
+  };
+
+  const shapeTargetOf = (entry: Entry & { object: Shape }): ShapeTarget => {
+    const { object } = entry;
+    const look = shapeLook(object);
+    const offset = drag?.objectId === object.objectId ? drag : { dx: 0, dy: 0 };
+    return {
+      objectId: object.objectId,
+      kind: "Shape",
+      shape: object.kind,
+      rgb: rgbOf(object),
+      fill: look.fill,
+      fillRgb: look.fillRgb,
+      outline: look.outline,
+      opacity: look.opacity,
+      width: look.width,
+      style: look.style,
+      rect: screenRect(object.bbox, offset),
+    };
+  };
+
+  const targetOf = (): ContextTarget | undefined => {
     const entry = targetEntry();
+    if (!editing && entry?.type === "Shape") return shapeTargetOf(entry);
     if (!isWritable(entry)) return undefined;
     const object = liveObject(entry);
     const offset = drag?.objectId === object.objectId ? drag : { dx: 0, dy: 0 };
-    const box = onScreen(object.bbox, offset);
-    const rect = canvas.getBoundingClientRect();
     return {
       objectId: object.objectId,
       kind: object.type,
@@ -669,12 +718,7 @@ export function createSurface(
       href: object.href,
       width: object.width,
       sizePx: worldFont(object) * camera.zoom,
-      rect: {
-        left: rect.left + box.minX,
-        top: rect.top + box.minY,
-        right: rect.left + box.maxX,
-        bottom: rect.top + box.maxY,
-      },
+      rect: screenRect(object.bbox, offset),
       editing: editing?.objectId === object.objectId,
     };
   };
@@ -905,10 +949,37 @@ export function createSurface(
     }
   };
 
+  const restyledOf = (entry: Entry): Entry | undefined =>
+    restyled?.base === entry && selected === entry.object.objectId ? restyled.preview : undefined;
+
   const selectedEntry = (): Entry | undefined => {
     if (selected === undefined) return undefined;
     if (resizing?.objectId === selected && resizing.preview) return resizing.preview;
-    return entries.get(selected);
+    const entry = entries.get(selected);
+    return entry && (restyledOf(entry) ?? entry);
+  };
+
+  const restyledShape = (
+    change: ShapeChange,
+  ): { base: Entry; stored: StoredObject } | undefined => {
+    const base = selected === undefined ? undefined : entries.get(selected);
+    if (base?.type !== "Shape") return undefined;
+    const stored = restyleShape(base.tile, base.object, change);
+    return stored && { base, stored };
+  };
+
+  const previewShape = (change: ShapeChange | undefined) => {
+    const next = change && restyledShape(change);
+    const preview = next && entryOf(next.stored);
+    restyled = next && preview ? { base: next.base, preview } : undefined;
+    requestRender();
+  };
+
+  const styleShape = (change: ShapeChange) => {
+    const next = restyledShape(change);
+    restyled = undefined;
+    requestRender();
+    commitEdit(next?.stored);
   };
 
   const selectionCorners = (entry: Entry): Point[] => {
@@ -1773,6 +1844,8 @@ export function createSurface(
     },
     finishEdit,
     styleText,
+    styleShape,
+    previewShape,
     panBy(dx, dy) {
       follow.stop();
       moveCamera(pan(camera, dx, dy));

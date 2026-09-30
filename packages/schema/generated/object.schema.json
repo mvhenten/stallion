@@ -226,6 +226,21 @@
             "None",
             "Tint"
           ]
+        },
+        "fillRgb": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16777215
+        },
+        "outline": {
+          "default": true,
+          "type": "boolean"
+        },
+        "opacity": {
+          "default": 1,
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         }
       },
       "required": [

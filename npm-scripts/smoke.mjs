@@ -636,6 +636,91 @@ const smokeHighlighter = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
+const SHAPE_FILL_HEX = "#30a46c";
+const SHAPE_FILL_RGB = [0x30, 0xa4, 0x6c];
+const SHAPE_OPACITY = 0.5;
+const BLEND_TOLERANCE = 10;
+
+const smokeShapeStyle = async ({ browser, devices, analyser, url, dir }) => {
+  const label = "shape style";
+  const context = await browser.newContext({ ...devices[DEVICE], colorScheme: "light" });
+  await routeAccessHeaders(context, new URL(url).origin);
+  const page = await context.newPage();
+  const problems = watchPage(page, url);
+  const check = () => {
+    if (problems.length > 0) fail(`${label}: ${problems[0]}`);
+  };
+  const shot = async (name) => {
+    const path = join(dir, `shape-style-${name}.png`);
+    writeFileSync(path, await page.screenshot());
+    return path;
+  };
+  const sample = async (point) =>
+    meanRgb(
+      analyser,
+      await page.screenshot({
+        scale: "css",
+        clip: {
+          x: point.x - SAMPLE_PX / 2,
+          y: point.y - SAMPLE_PX / 2,
+          width: SAMPLE_PX,
+          height: SAMPLE_PX,
+        },
+      }),
+    );
+  const want = SHAPE_FILL_RGB.map((channel, index) =>
+    Math.round(channel * SHAPE_OPACITY + PAPER_RGB[index] * (1 - SHAPE_OPACITY)),
+  );
+  const expectBlend = (rgb, stage) => {
+    if (rgb.some((channel, index) => Math.abs(channel - want[index]) > BLEND_TOLERANCE)) {
+      fail(`${label}: the fill samples ${rgb.join(",")} ${stage}, want about ${want.join(",")}`);
+    }
+  };
+  try {
+    await page.goto(url, { waitUntil: "load" });
+    await waitForBoard(page);
+    const more = page.getByRole("button", { name: "More tools" });
+    if (await more.isVisible()) await more.tap();
+    await page.locator("[data-toolbar-flip]").tap();
+    const palette = page.locator(PALETTE);
+    await palette.waitFor({ state: "visible", timeout: 5000 });
+    await page.waitForTimeout(500);
+    const viewport = page.viewportSize() ?? fail("no viewport");
+    const box = (await palette.boundingBox()) ?? fail(`${label}: no palette bounding box`);
+    const left = box.x + box.width + CLIP_PAD + 20;
+    const right = viewport.width - 40;
+    const top = Math.round(viewport.height * 0.45);
+    const bottom = Math.round(viewport.height * 0.8);
+    const centre = { x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) };
+    await palette.getByRole("button", { name: "Rectangle", exact: true }).tap();
+    const fill = palette.getByRole("button", { name: "Fill shapes" });
+    if ((await fill.getAttribute("aria-pressed")) === "true") await fill.tap();
+    await drawWithTouch(page, linePath({ x: left, y: top }, { x: right, y: bottom }));
+    await page.waitForTimeout(500);
+    await palette.getByRole("button", { name: "Select tool" }).tap();
+    await drawWithTouch(page, [{ x: left, y: centre.y }]);
+    const toolbar = page.getByRole("toolbar", { name: "Shape", exact: true });
+    await toolbar.waitFor({ state: "visible", timeout: 5000 });
+    await toolbar.getByLabel("Fill colour").fill(SHAPE_FILL_HEX);
+    await page.waitForTimeout(300);
+    await toolbar.getByLabel("Opacity").fill(String(SHAPE_OPACITY * 100));
+    await page.waitForTimeout(800);
+    const styled = await shot("styled");
+    expectBlend(await sample(centre), "after styling");
+    check();
+    await page.reload({ waitUntil: "load" });
+    await waitForBoard(page);
+    await page.waitForTimeout(1500);
+    const rgb = await sample(centre);
+    const reloaded = await shot("reloaded");
+    expectBlend(rgb, "after reload");
+    check();
+    return { rgb, want, screenshots: [styled, reloaded] };
+  } finally {
+    await context.close();
+  }
+};
+
 const SHAPE_DEVICES = [DEVICE, "Pixel 7"];
 const SHAPE_ROWS = 5;
 const SHAPE_KINDS = ["Rectangle", "Ellipse", "Line", "Arrow"];
@@ -1370,6 +1455,17 @@ const main = async () => {
       );
       for (const path of shapes.screenshots) console.log(`  ${path}`);
     }
+    const shapeStyle = await smokeShapeStyle({
+      browser,
+      devices,
+      analyser,
+      url: siblingBoard(options.url),
+      dir,
+    });
+    console.log(
+      `PASS shape style: fill at 50% samples ${shapeStyle.rgb.join(",")} after reload, want ${shapeStyle.want.join(",")}`,
+    );
+    for (const path of shapeStyle.screenshots) console.log(`  ${path}`);
     for (const device of SHAPE_DEVICES) {
       for (const object of RESIZE_OBJECTS) {
         const resize = await smokeResize({
