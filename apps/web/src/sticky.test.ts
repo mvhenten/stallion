@@ -7,6 +7,9 @@ import {
   paintSticky,
   readableInk,
   STICKY_SHADOW_BLUR_PX,
+  STICKY_SHADOW_COLOUR,
+  STICKY_SHADOW_OFFSET_X_PX,
+  STICKY_SHADOW_OFFSET_Y_PX,
   stickyMetrics,
 } from "./sticky";
 
@@ -25,13 +28,14 @@ const note: Sticky = {
   fit: "Fixed",
 };
 
-type ShadowLog = { blur: number[]; fills: number };
+type Shadow = { colour: string; blur: number; offsetX: number; offsetY: number };
+type ShadowLog = { shadows: Shadow[]; fills: number };
 
 const fakeCtx = (
   width: number,
   height: number,
 ): { ctx: CanvasRenderingContext2D; log: ShadowLog } => {
-  const log: ShadowLog = { blur: [], fills: 0 };
+  const log: ShadowLog = { shadows: [], fills: 0 };
   const ctx = {
     fillStyle: "",
     shadowColor: "",
@@ -41,7 +45,12 @@ const fakeCtx = (
     canvas: { width, height },
     getTransform: () => ({ a: 1, d: 1 }),
     fillRect: () => {
-      log.blur.push(ctx.shadowBlur);
+      log.shadows.push({
+        colour: ctx.shadowColor,
+        blur: ctx.shadowBlur,
+        offsetX: ctx.shadowOffsetX,
+        offsetY: ctx.shadowOffsetY,
+      });
       log.fills++;
     },
     save: () => undefined,
@@ -69,20 +78,31 @@ test("a new note is the default size on screen with its font inside the width bo
   }
 });
 
-test("casts a drop shadow behind an ordinary note, then resets it", () => {
+test("casts a strong drop shadow behind an ordinary note, then resets it", () => {
   const { ctx, log } = fakeCtx(2000, 2000);
   paintSticky(ctx, note, [], rect, 1, false, bounds, false);
   expect(log.fills).toBe(1);
-  expect(log.blur).toEqual([STICKY_SHADOW_BLUR_PX]);
+  expect(log.shadows).toEqual([
+    {
+      colour: STICKY_SHADOW_COLOUR,
+      blur: STICKY_SHADOW_BLUR_PX,
+      offsetX: STICKY_SHADOW_OFFSET_X_PX,
+      offsetY: STICKY_SHADOW_OFFSET_Y_PX,
+    },
+  ]);
+  expect(STICKY_SHADOW_COLOUR).toBe("rgba(0, 0, 0, 0.35)");
+  expect(STICKY_SHADOW_BLUR_PX).toBe(10);
+  expect(STICKY_SHADOW_OFFSET_X_PX).toBe(0);
+  expect(STICKY_SHADOW_OFFSET_Y_PX).toBe(3);
   expect(ctx.shadowBlur).toBe(0);
 });
 
 test("skips the shadow for a note the caller flags oversized, and for one that would exceed the canvas", () => {
   const flagged = fakeCtx(2000, 2000);
   paintSticky(flagged.ctx, note, [], rect, 1, false, bounds, true);
-  expect(flagged.log.blur).toEqual([0]);
+  expect(flagged.log.shadows).toEqual([{ colour: "", blur: 0, offsetX: 0, offsetY: 0 }]);
 
   const tinyCanvas = fakeCtx(10, 10);
   paintSticky(tinyCanvas.ctx, note, [], rect, 1, false, bounds, false);
-  expect(tinyCanvas.log.blur).toEqual([0]);
+  expect(tinyCanvas.log.shadows).toEqual([{ colour: "", blur: 0, offsetX: 0, offsetY: 0 }]);
 });

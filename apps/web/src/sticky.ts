@@ -162,10 +162,10 @@ export const scaleSticky = (
 
 export type ScreenRect = { x: number; y: number; width: number; height: number };
 
-export const STICKY_SHADOW_COLOUR = "rgba(0, 0, 0, 0.18)";
-export const STICKY_SHADOW_BLUR_PX = 6;
+export const STICKY_SHADOW_COLOUR = "rgba(0, 0, 0, 0.35)";
+export const STICKY_SHADOW_BLUR_PX = 10;
 export const STICKY_SHADOW_OFFSET_X_PX = 0;
-export const STICKY_SHADOW_OFFSET_Y_PX = 2;
+export const STICKY_SHADOW_OFFSET_Y_PX = 3;
 
 const fitsCanvas = (ctx: CanvasRenderingContext2D, width: number, height: number): boolean => {
   const { a: scaleX, d: scaleY } = ctx.getTransform();
