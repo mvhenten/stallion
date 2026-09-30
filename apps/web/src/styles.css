@@ -976,6 +976,7 @@ body,
 
 .toolbar[data-layout="Palette"] .hex-field {
   grid-column: 1 / -1;
+  height: 28px;
 }
 
 .swatch-fill[data-light] {
