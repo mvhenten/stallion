@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!packages/schema/generated"]
+    "includes": ["**", "!packages/schema/generated", "!docs/transcripts"]
   },
   "formatter": {
     "enabled": true,
