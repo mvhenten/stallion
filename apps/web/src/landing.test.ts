@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastOpenedLabel } from "./landing";
+import { lastOpenedLabel, remoteAfter } from "./landing";
 
 describe("lastOpenedLabel", () => {
   it("shows not opened yet for a board that was never opened", () => {
@@ -10,5 +10,11 @@ describe("lastOpenedLabel", () => {
     const now = Date.now();
     const oneHourAgo = now - 60 * 60 * 1000;
     expect(lastOpenedLabel(oneHourAgo, now)).toBe("1 hour ago");
+  });
+});
+
+describe("remoteAfter", () => {
+  it("shows the signed-out state when Access redirects to its login page", () => {
+    expect(remoteAfter("AuthRedirect", "the sign-in expired").state).toBe("SignedOut");
   });
 });
