@@ -22,11 +22,11 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 | `npm run build` / `build:worker` | Vite build of `apps/web` / wasm bundle in `crates/server/build`; `build:worker` installs rustup, the toolchain and `worker-build` when missing |
 | `npm run deploy` | `wrangler deploy` with the Access vars from `infra/access.json`; refuses to run outside Workers Builds |
 | `npm run wait:live -- <sha> [origin]` | Poll `/api/me/boards` through Access until `x-stallion-commit` equals the sha, at most 15 minutes |
-| `npm run smoke -- [--pull] [url]` | One real page load on a touch tablet, light and dark: draw, reload, check the stroke; then the palette, and a stroke in a custom `#123456` that must keep its pixel colour after a reload; then a 1 px and a 60 px stroke whose ink ratios keep their order after a reload; then, on a fresh board, a pen stroke with a highlighter across it whose overlap stays darker than either alone after a reload; then, on a fresh board per device, a tablet and a phone each draw a filled rectangle, an ellipse, a line and an arrow, move the rectangle, reload and check all four stored and where they were left; then a tablet and a phone each place text, edit it past its wrap width, reload and check the wrapped lines are drawn and the tile is stored |
+| `npm run smoke -- [--pull] [url]` | Without a url, starts the `serve:sync` server on a free 127.0.0.1 port and stops it afterwards. One real page load on a touch tablet, light and dark: draw, reload, check the stroke; then the palette, and a stroke in a custom `#123456` that must keep its pixel colour after a reload; then a 1 px and a 60 px stroke whose ink ratios keep their order after a reload; then, on a fresh board, a pen stroke with a highlighter across it whose overlap stays darker than either alone after a reload; then, on a fresh board per device, a tablet and a phone each draw a filled rectangle, an ellipse, a line and an arrow, move the rectangle, reload and check all four stored and where they were left; then a tablet and a phone each place text, edit it past its wrap width, reload and check the wrapped lines are drawn and the tile is stored |
 | `npm run demo:duo -- <url> [--board <id>]` | Two 1280x800 browsers on one board: A draws blue, B draws red on top; checks each sees the other's ink and both read Connected. Videos, a side-by-side `combined.mp4` and screenshots land in `~/development/.tmp/stallion-duo/<timestamp>/` |
 | `npm run access:env` | Write the Access service token from `tofu output` into `~/.config/stallion/access-env` (mode 600); prints nothing |
 | `npm run icons -w @stallion/web` | Regenerate the PWA icons in `apps/web/public/icons` with sharp |
-| `npm run serve:sync` | Build `apps/web` against the local worker and serve both with `wrangler dev` on port 8787 |
+| `npm run serve:sync` | Build `apps/web` against the local worker (`VITE_SYNC_URL`, default `ws://127.0.0.1:8787`) and serve both with `wrangler dev` on `SERVE_HOST:SERVE_PORT`, default `127.0.0.1:8787`; builds `crates/server/build` when missing |
 
 `wrangler.jsonc` runs the worker from `crates/server/build` and serves `apps/web/dist` as static assets.
 
@@ -35,14 +35,14 @@ An infinite-zoom drawing board. Client: TypeScript, Preact and Vite in `apps/web
 The Worker serves both the assets and the WebSocket, so the client needs no build-time config in production. `syncUrlFor()` in `apps/web/src/sync.ts` picks the sync server once per board:
 
 1. `VITE_SYNC_URL`, when it was set at build time (`npm run serve:sync` sets it to the local worker).
-2. Otherwise local only, when the page is on localhost, a private LAN address, a tailnet address (`100.64.0.0/10`) or `*.ts.net`. That is the Vite dev server.
+2. Otherwise local only, when the page is on localhost, or a private LAN address. That is the Vite dev server.
 3. Otherwise the page's own origin, `wss://<host>` (or `ws://` over http). `openBoard` appends `/api/boards/<boardId>/ws`.
 
 Workers Builds builds without `VITE_SYNC_URL`, so the deployed app syncs with the Worker that served it.
 
 ## Smoke
 
-After pushing to main, run `npm run smoke -- --pull` and paste its result in the final summary. It fast-forwards `~/development/stallion`, reinstalls, then loads the live dev server (default `http://100.104.44.51:5173/b/<fresh id>`, a new board each run) headless on a Galaxy Tab S9 viewport in light and dark, draws one touch stroke, reloads and checks the stroke is stored and visible. Any console error or failed request fails it. Screenshots land in `~/development/.tmp/stallion-smoke/<timestamp>/`. A push is not done until the smoke passes.
+After pushing to main, run `npm run smoke -- --pull` and paste its result in the final summary. It fast-forwards `~/development/stallion` and reinstalls. Without a url it then builds the app against a local Worker, runs `wrangler dev` on a free 127.0.0.1 port, waits up to 180 s for it to answer and stops it when the smoke ends; a server that does not come up fails the smoke with its output. It loads `/b/<fresh id>`, a new board each run, headless on a Galaxy Tab S9 viewport in light and dark, draws one touch stroke, reloads and checks the stroke is stored and visible. Any console error or failed request fails it. Screenshots land in `~/development/.tmp/stallion-smoke/<timestamp>/`. A push is not done until the smoke passes.
 
 Against the deployed Worker, run `npm run access:env` once, then `npm run smoke -- https://stallion.kattebak.fyi/b/<id>` or `npm run demo:duo -- https://stallion.kattebak.fyi/`. Both scripts read `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` from the environment, else from `~/.config/stallion/access-env`, and send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret` on every request of every browser context. The `smoke` job in `deploy.yml` runs the same smoke on `/b/ci-<run id>` once the live Worker serves the pushed commit, reading both values from the `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` repo secrets; a failing smoke fails the workflow.
 
