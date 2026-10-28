@@ -78,9 +78,9 @@ GitHub holds no Cloudflare API token and CI never plans or applies. The local to
 
 - Account, Access: Organizations, Identity Providers, and Groups, Edit
 - Account, Access: Apps and Policies, Edit
+- Account, Access: Policies, Edit
 - Account, Access: Service Tokens, Edit
 - Account, Workers Scripts, Edit
-- User, User Details, Read
 
 ## Board URLs
 
