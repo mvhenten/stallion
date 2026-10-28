@@ -8,6 +8,7 @@ import { loadRecents, type RecentBoard, removeRecent, renameRecent, saveRecents 
 import { useConnectionNotice } from "./reconnect";
 import { ReconnectNotice } from "./reconnect-notice";
 import { reportLink } from "./report";
+import { goToSignIn, pageSignIn } from "./sign-in";
 import { CONNECTION_LABEL, type Connection, connectionFor } from "./sync";
 
 const LANDING_LABEL: Record<Connection, string> = {
@@ -49,11 +50,7 @@ function RemoteNotice({ remote }: { remote: Remote }) {
     return (
       <div class="landing-alert" role="alert">
         <p>Your sign-in has expired, so your boards from other devices are missing.</p>
-        <button
-          type="button"
-          class="action"
-          onClick={() => window.location.assign(window.location.href)}
-        >
+        <button type="button" class="action" onClick={goToSignIn}>
           Sign in again
         </button>
       </div>
@@ -119,10 +116,12 @@ export function Landing() {
       if (!live) return;
       saveRecents(localStorage, synced.boards);
       setRecents(synced.boards);
+      if (synced.state === "Synced") pageSignIn().signedIn();
       const next: Remote =
         synced.state === "Synced"
           ? { state: "Synced" }
           : remoteAfter(synced.reason, synced.message);
+      if (next.state === "SignedOut" && pageSignIn().redirectOnce()) return;
       setRemote(next);
       if (next.state === "SignedOut") {
         setConnection("Offline");
