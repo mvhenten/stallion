@@ -9,3 +9,9 @@ variable "app_domains" {
   description = "Hostnames of the stallion Worker that Access guards; the first is the primary domain."
   default     = ["stallion.kattebak.fyi", "stallion.matthijs-f49.workers.dev"]
 }
+
+variable "access_paths" {
+  type        = list(string)
+  description = "Paths on every app domain that Access guards, each with its subpaths; the rest of the hostname is public."
+  default     = ["/api", "/sign-in"]
+}
