@@ -72,14 +72,18 @@ resource "cloudflare_zero_trust_access_policy" "automation" {
   }]
 }
 
+locals {
+  access_destinations = flatten([for host in var.app_domains : [for path in var.access_paths : "${host}${path}"]])
+}
+
 resource "cloudflare_zero_trust_access_application" "stallion" {
   account_id = var.account_id
   name       = "stallion"
   type       = "self_hosted"
-  domain     = var.app_domains[0]
-  destinations = [for host in var.app_domains : {
+  domain     = local.access_destinations[0]
+  destinations = [for uri in local.access_destinations : {
     type = "public"
-    uri  = host
+    uri  = uri
   }]
   session_duration          = "720h"
   auto_redirect_to_identity = true
