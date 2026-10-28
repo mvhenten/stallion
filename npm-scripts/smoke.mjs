@@ -1395,8 +1395,15 @@ const smokeTextStyle = async ({ browser, devices, analyser, url, dir }) => {
 };
 
 const main = async () => {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.pull) pull();
+  const argv = process.argv.slice(2);
+  const options = parseArgs(argv);
+  if (options.pull) {
+    pull();
+    const script = join(CHECKOUT, "npm-scripts", "smoke.mjs");
+    const args = argv.filter((arg) => arg !== "--pull");
+    const child = spawnSync(process.execPath, [script, ...args], { stdio: "inherit" });
+    process.exit(child.status ?? 1);
+  }
   if (options.url) return smoke(options);
   const { startServer } = await import("./serve-sync.mjs");
   const server = await startServer();
