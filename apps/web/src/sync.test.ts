@@ -1,7 +1,7 @@
 import type { StoredObject } from "@stallion/client-store";
 import type { StallionBoard } from "@stallion/client-sync";
 import { expect, test, vi } from "vitest";
-import { type OpenBoard, openSource } from "./sync";
+import { type OpenBoard, openSource, syncUrlFor } from "./sync";
 
 const stored: StoredObject = {
   tile: { level: 0, tx: 0, ty: 0 },
@@ -42,4 +42,13 @@ test("a stroke commit goes through put and an erase through remove", () => {
   expect(put).toHaveBeenCalledWith(stored);
   expect(remove).toHaveBeenCalledWith(stored.object.objectId);
   expect(connections).toEqual(["Reconnecting"]);
+});
+
+test.each([
+  ["localhost", undefined],
+  ["192.168.1.20", undefined],
+  ["stallion.example.com", "ws://stallion.example.com:5173"],
+])("a page on %s syncs with %s", (hostname, expected) => {
+  const location = { protocol: "http:", hostname, host: `${hostname}:5173` };
+  expect(syncUrlFor(undefined, location)).toBe(expected);
 });

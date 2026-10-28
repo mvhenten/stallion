@@ -24,7 +24,7 @@
     "smoke": "node npm-scripts/smoke.mjs",
     "wait:live": "node npm-scripts/wait-live.mjs",
     "demo:duo": "node npm-scripts/duo-demo.mjs",
-    "serve:sync": "VITE_SYNC_URL=${VITE_SYNC_URL:-ws://100.104.44.51:8787} npm run build -w @stallion/web && wrangler dev --ip 0.0.0.0 --port 8787",
+    "serve:sync": "node npm-scripts/serve-sync.mjs",
     "deploy:dry": "wrangler deploy --dry-run --outdir ~/development/.tmp/stallion-dry",
     "deploy": "node npm-scripts/deploy.mjs",
     "infra:plan": "node npm-scripts/infra.mjs plan",

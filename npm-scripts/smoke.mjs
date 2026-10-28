@@ -6,8 +6,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { routeAccessHeaders } from "./env.mjs";
 
-const DEV_ORIGIN = "http://100.104.44.51:5173";
-
 const randomBoardId = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   let value = 0n;
@@ -44,7 +42,7 @@ const parseArgs = (argv) => {
   const flags = argv.filter((arg) => arg.startsWith("--"));
   const unknown = flags.filter((flag) => flag !== "--pull");
   if (unknown.length > 0) fail(`unknown flag ${unknown.join(", ")}; usage: smoke [--pull] [url]`);
-  const [url = `${DEV_ORIGIN}/b/${randomBoardId()}`] = argv.filter((arg) => !arg.startsWith("--"));
+  const [url] = argv.filter((arg) => !arg.startsWith("--"));
   return { url, pull: flags.includes("--pull") };
 };
 
@@ -1399,6 +1397,21 @@ const smokeTextStyle = async ({ browser, devices, analyser, url, dir }) => {
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
+  if (options.url) return smoke(options);
+  const { startServer } = await import("./serve-sync.mjs");
+  const server = await startServer();
+  console.log(`local server: ${server.origin}`);
+  const stop = () => server.stop().then(() => process.exit(130));
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    await smoke({ ...options, url: `${server.origin}/b/${randomBoardId()}` });
+  } finally {
+    await server.stop();
+  }
+};
+
+const smoke = async (options) => {
   const { chromium, devices } = await import("playwright");
   const dir = join(SHOTS_ROOT, new Date().toISOString().replace(/[:.]/g, "-"));
   mkdirSync(dir, { recursive: true });
@@ -1526,6 +1539,6 @@ const main = async () => {
 
 main().catch((error) => {
   const reason = error instanceof SmokeFailure ? error.message : String(error?.message ?? error);
-  console.error(`smoke failed: ${reason.split("\n")[0]}`);
+  console.error(`smoke failed: ${reason}`);
   process.exit(1);
 });
