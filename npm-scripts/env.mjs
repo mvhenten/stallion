@@ -43,3 +43,7 @@ export const routeAccessHeaders = async (context, origin) => {
     (route) => route.continue({ headers: { ...route.request().headers(), ...headers } }),
   );
 };
+
+// Chromium moves to HTTP/3 after the first response; over QUIC from GitHub's runners the
+// page's asset requests stall until the navigation times out, so every browser stays on HTTP/2.
+export const BROWSER_OPTIONS = { headless: true, args: ["--disable-quic"] };

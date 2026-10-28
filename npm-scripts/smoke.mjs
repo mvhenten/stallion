@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { routeAccessHeaders } from "./env.mjs";
+import { BROWSER_OPTIONS, routeAccessHeaders } from "./env.mjs";
 
 const randomBoardId = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -49,14 +49,14 @@ const parseArgs = (argv) => {
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 
 const launch = async (chromium) => {
-  const missing = await chromium.launch({ headless: true }).then(
+  const missing = await chromium.launch(BROWSER_OPTIONS).then(
     (browser) => ({ browser }),
     (error) => ({ error }),
   );
   if (missing.browser) return missing.browser;
   if (!/Executable doesn't exist/.test(String(missing.error?.message))) throw missing.error;
   run("npx", ["playwright", "install", "chromium-headless-shell"], REPO);
-  return chromium.launch({ headless: true });
+  return chromium.launch(BROWSER_OPTIONS);
 };
 
 const strokePath = (viewport, left = 0) => {

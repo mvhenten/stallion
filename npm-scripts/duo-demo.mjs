@@ -5,7 +5,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { routeAccessHeaders } from "./env.mjs";
+import { BROWSER_OPTIONS, routeAccessHeaders } from "./env.mjs";
 
 const ROOT = join(homedir(), "development", ".tmp", "stallion-duo");
 const VIEWPORT = { width: 1280, height: 800 };
@@ -49,7 +49,7 @@ const parseArgs = (argv) => {
 };
 
 const launch = async (chromium) => {
-  const first = await chromium.launch({ headless: true }).then(
+  const first = await chromium.launch(BROWSER_OPTIONS).then(
     (browser) => ({ browser }),
     (error) => ({ error }),
   );
@@ -60,7 +60,7 @@ const launch = async (chromium) => {
     stdio: "inherit",
   });
   if (install.status !== 0) fail("playwright install failed");
-  return chromium.launch({ headless: true });
+  return chromium.launch(BROWSER_OPTIONS);
 };
 
 const watchPage = (name, page, url) => {
