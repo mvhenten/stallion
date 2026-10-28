@@ -8,6 +8,7 @@ import { loadRecents, type RecentBoard, removeRecent, renameRecent, saveRecents 
 import { useConnectionNotice } from "./reconnect";
 import { ReconnectNotice } from "./reconnect-notice";
 import { reportLink } from "./report";
+import { type SignInRedirect, signIn } from "./sign-in";
 import { CONNECTION_LABEL, type Connection, connectionFor } from "./sync";
 
 const LANDING_LABEL: Record<Connection, string> = {
@@ -24,15 +25,20 @@ type Remote =
   | { state: "Syncing" }
   | { state: "Synced" }
   | { state: "Offline" }
+  | { state: "SigningIn" }
   | { state: "SignedOut"; message: string }
   | { state: "Failed"; message: string };
 
-export const remoteAfter = (reason: string, message: string): Remote => {
+export const remoteAfter = (
+  reason: string,
+  message: string,
+  redirect: SignInRedirect = signIn,
+): Remote => {
   if (reason === "NetworkError" && globalThis.navigator?.onLine === false) {
     return { state: "Offline" };
   }
   if (reason === "Http401" || reason === "Http403" || reason === "AuthRedirect") {
-    return { state: "SignedOut", message };
+    return redirect.expired() ? { state: "SigningIn" } : { state: "SignedOut", message };
   }
   return { state: "Failed", message: `Could not sync your boards: ${message}` };
 };
@@ -119,12 +125,13 @@ export function Landing() {
       if (!live) return;
       saveRecents(localStorage, synced.boards);
       setRecents(synced.boards);
+      if (synced.state === "Synced") signIn.signedIn();
       const next: Remote =
         synced.state === "Synced"
           ? { state: "Synced" }
           : remoteAfter(synced.reason, synced.message);
       setRemote(next);
-      if (next.state === "SignedOut") {
+      if (next.state === "SignedOut" || next.state === "SigningIn") {
         setConnection("Offline");
         return;
       }

@@ -13,6 +13,7 @@ import { errorMessage, reportLink } from "./report";
 import type { ShapeChange } from "./shape";
 import { ShapeToolbar } from "./shape-toolbar";
 import { boardLink, SharePanel } from "./share";
+import { signIn } from "./sign-in";
 import {
   type ContextTarget,
   createSurface,
@@ -140,7 +141,7 @@ export function Board({ boardId }: { boardId: string }) {
         result.reason === "Http403")
     );
   }, []);
-  const notice = useConnectionNotice(connection, checkAuthExpired);
+  const notice = useConnectionNotice(connection, checkAuthExpired, signIn);
 
   useEffect(() => {
     const canvas = canvasRef.current;

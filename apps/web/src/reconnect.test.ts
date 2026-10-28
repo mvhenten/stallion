@@ -27,15 +27,35 @@ test("reconnecting for 10s shows the bar, connected hides it", () => {
   expect(states).toEqual(["Reconnecting", "None"]);
 });
 
-test("a check that resolves expired upgrades the bar once it fires", async () => {
+test("a check that resolves expired shows the notice once the redirect already ran", async () => {
   const states: NoticeState[] = [];
   const controller = createConnectionNotice(
     (state) => states.push(state),
     () => Promise.resolve(true),
+    { expired: () => false, signedIn: vi.fn() },
   );
 
   controller.onConnection("Offline");
   await vi.advanceTimersByTimeAsync(RECONNECT_NOTICE_MS);
 
   expect(states).toEqual(["Reconnecting", "Expired"]);
+});
+
+test("an expired check redirects to the login instead of showing the notice", async () => {
+  const states: NoticeState[] = [];
+  const redirect = { expired: vi.fn(() => true), signedIn: vi.fn() };
+  const controller = createConnectionNotice(
+    (state) => states.push(state),
+    () => Promise.resolve(true),
+    redirect,
+  );
+
+  controller.onConnection("Offline");
+  await vi.advanceTimersByTimeAsync(RECONNECT_NOTICE_MS);
+
+  expect(redirect.expired).toHaveBeenCalledOnce();
+  expect(states).toEqual(["Reconnecting"]);
+
+  controller.onConnection("Connected");
+  expect(redirect.signedIn).toHaveBeenCalledOnce();
 });

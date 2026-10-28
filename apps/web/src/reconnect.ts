@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
+import type { SignInRedirect } from "./sign-in";
 import type { Connection } from "./sync";
 
 export const RECONNECT_NOTICE_MS = 10_000;
@@ -16,6 +17,7 @@ const isStale = (connection: Connection): boolean =>
 export function createConnectionNotice(
   setNotice: (notice: NoticeState) => void,
   checkExpired?: () => Promise<boolean>,
+  redirect?: SignInRedirect,
 ): ConnectionNoticeController {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let live = true;
@@ -27,6 +29,7 @@ export function createConnectionNotice(
 
   return {
     onConnection(connection) {
+      if (connection === "Connected") redirect?.signedIn();
       if (!isStale(connection)) {
         clear();
         setNotice("None");
@@ -37,7 +40,7 @@ export function createConnectionNotice(
         timer = undefined;
         setNotice("Reconnecting");
         checkExpired?.().then((expired) => {
-          if (live && expired) setNotice("Expired");
+          if (live && expired && !redirect?.expired()) setNotice("Expired");
         });
       }, RECONNECT_NOTICE_MS);
     },
@@ -51,6 +54,7 @@ export function createConnectionNotice(
 export function useConnectionNotice(
   connection: Connection,
   checkExpired?: () => Promise<boolean>,
+  redirect?: SignInRedirect,
 ): NoticeState {
   const [notice, setNotice] = useState<NoticeState>("None");
   const checkRef = useRef(checkExpired);
@@ -60,6 +64,7 @@ export function useConnectionNotice(
     controllerRef.current = createConnectionNotice(
       setNotice,
       checkRef.current ? () => checkRef.current?.() ?? Promise.resolve(false) : undefined,
+      redirect,
     );
   }
 
