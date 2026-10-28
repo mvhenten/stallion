@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const WORKER_BUILD = join(REPO, "crates", "server", "build", "index.js");
 const WRANGLER = join(REPO, "node_modules", ".bin", "wrangler");
 const READY_TIMEOUT_MS = 180_000;
 const OUTPUT_TAIL = 60;
@@ -19,7 +17,7 @@ const run = (command, args, env = process.env) => {
   }
 };
 
-export const freePort = (host) =>
+const freePort = (host) =>
   new Promise((resolve, reject) => {
     const server = createServer();
     server.once("error", reject);
@@ -29,10 +27,10 @@ export const freePort = (host) =>
     });
   });
 
-export const prepare = ({ host, port, syncUrl }) => {
+const prepare = ({ host, port, syncUrl }) => {
   const env = { ...process.env, VITE_SYNC_URL: syncUrl ?? `ws://${host}:${port}` };
   run("npm", ["run", "build", "-w", "@stallion/web"], env);
-  if (!existsSync(WORKER_BUILD)) run("npm", ["run", "build:worker"]);
+  run("npm", ["run", "build:worker"]);
 };
 
 const wranglerArgs = (host, port) => ["dev", "--ip", host, "--port", String(port)];

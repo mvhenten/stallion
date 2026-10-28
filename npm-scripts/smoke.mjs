@@ -1394,21 +1394,13 @@ const smokeTextStyle = async ({ browser, devices, analyser, url, dir }) => {
   }
 };
 
-const localServer = async () => {
-  const { startServer } = await import("./serve-sync.mjs");
-  const server = await startServer().catch((error) => {
-    console.error(error.message);
-    fail(error.message.split("\n")[0]);
-  });
-  console.log(`local server: ${server.origin}`);
-  return server;
-};
-
 const main = async () => {
   const options = parseArgs(process.argv.slice(2));
   if (options.pull) pull();
   if (options.url) return smoke(options);
-  const server = await localServer();
+  const { startServer } = await import("./serve-sync.mjs");
+  const server = await startServer();
+  console.log(`local server: ${server.origin}`);
   const stop = () => server.stop().then(() => process.exit(130));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -1547,6 +1539,6 @@ const smoke = async (options) => {
 
 main().catch((error) => {
   const reason = error instanceof SmokeFailure ? error.message : String(error?.message ?? error);
-  console.error(`smoke failed: ${reason.split("\n")[0]}`);
+  console.error(`smoke failed: ${reason}`);
   process.exit(1);
 });

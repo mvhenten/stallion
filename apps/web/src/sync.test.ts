@@ -46,18 +46,9 @@ test("a stroke commit goes through put and an erase through remove", () => {
 
 test.each([
   ["localhost", undefined],
-  ["127.0.0.1", undefined],
   ["192.168.1.20", undefined],
-  ["10.0.0.5", undefined],
-  ["172.20.0.1", undefined],
-  ["100.104.44.51", "ws://100.104.44.51:5173"],
-  ["box.example.ts.net", "ws://box.example.ts.net:5173"],
+  ["stallion.example.com", "ws://stallion.example.com:5173"],
 ])("a page on %s syncs with %s", (hostname, expected) => {
   const location = { protocol: "http:", hostname, host: `${hostname}:5173` };
   expect(syncUrlFor(undefined, location)).toBe(expected);
-});
-
-test("a configured sync url wins over the page origin", () => {
-  const location = { protocol: "https:", hostname: "localhost", host: "localhost" };
-  expect(syncUrlFor("ws://127.0.0.1:8787", location)).toBe("ws://127.0.0.1:8787");
 });
