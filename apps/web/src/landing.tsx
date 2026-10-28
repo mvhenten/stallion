@@ -27,11 +27,13 @@ type Remote =
   | { state: "SignedOut"; message: string }
   | { state: "Failed"; message: string };
 
-const remoteAfter = (reason: string, message: string): Remote => {
+export const remoteAfter = (reason: string, message: string): Remote => {
   if (reason === "NetworkError" && globalThis.navigator?.onLine === false) {
     return { state: "Offline" };
   }
-  if (reason === "Http401" || reason === "Http403") return { state: "SignedOut", message };
+  if (reason === "Http401" || reason === "Http403" || reason === "AuthRedirect") {
+    return { state: "SignedOut", message };
+  }
   return { state: "Failed", message: `Could not sync your boards: ${message}` };
 };
 
