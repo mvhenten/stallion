@@ -8,7 +8,7 @@ import { loadRecents, type RecentBoard, removeRecent, renameRecent, saveRecents 
 import { useConnectionNotice } from "./reconnect";
 import { ReconnectNotice } from "./reconnect-notice";
 import { reportLink } from "./report";
-import { type SignInRedirect, signIn } from "./sign-in";
+import { goToSignIn, pageSignIn } from "./sign-in";
 import { CONNECTION_LABEL, type Connection, connectionFor } from "./sync";
 
 const LANDING_LABEL: Record<Connection, string> = {
@@ -25,20 +25,15 @@ type Remote =
   | { state: "Syncing" }
   | { state: "Synced" }
   | { state: "Offline" }
-  | { state: "SigningIn" }
   | { state: "SignedOut"; message: string }
   | { state: "Failed"; message: string };
 
-export const remoteAfter = (
-  reason: string,
-  message: string,
-  redirect: SignInRedirect = signIn,
-): Remote => {
+export const remoteAfter = (reason: string, message: string): Remote => {
   if (reason === "NetworkError" && globalThis.navigator?.onLine === false) {
     return { state: "Offline" };
   }
   if (reason === "Http401" || reason === "Http403" || reason === "AuthRedirect") {
-    return redirect.expired() ? { state: "SigningIn" } : { state: "SignedOut", message };
+    return { state: "SignedOut", message };
   }
   return { state: "Failed", message: `Could not sync your boards: ${message}` };
 };
@@ -55,11 +50,7 @@ function RemoteNotice({ remote }: { remote: Remote }) {
     return (
       <div class="landing-alert" role="alert">
         <p>Your sign-in has expired, so your boards from other devices are missing.</p>
-        <button
-          type="button"
-          class="action"
-          onClick={() => window.location.assign(window.location.href)}
-        >
+        <button type="button" class="action" onClick={goToSignIn}>
           Sign in again
         </button>
       </div>
@@ -125,13 +116,14 @@ export function Landing() {
       if (!live) return;
       saveRecents(localStorage, synced.boards);
       setRecents(synced.boards);
-      if (synced.state === "Synced") signIn.signedIn();
+      if (synced.state === "Synced") pageSignIn().signedIn();
       const next: Remote =
         synced.state === "Synced"
           ? { state: "Synced" }
           : remoteAfter(synced.reason, synced.message);
+      if (next.state === "SignedOut" && pageSignIn().redirectOnce()) return;
       setRemote(next);
-      if (next.state === "SignedOut" || next.state === "SigningIn") {
+      if (next.state === "SignedOut") {
         setConnection("Offline");
         return;
       }

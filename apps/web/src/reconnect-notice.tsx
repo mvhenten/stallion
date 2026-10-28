@@ -1,4 +1,5 @@
 import type { NoticeState } from "./reconnect";
+import { goToSignIn } from "./sign-in";
 
 type ReconnectNoticeProps = {
   notice: NoticeState;
@@ -10,7 +11,7 @@ export function ReconnectNotice({ notice, reconnectMessage }: ReconnectNoticePro
     return (
       <div class="notice" role="alert">
         <p>Your sign-in expired.</p>
-        <button type="button" class="action" onClick={() => location.assign(location.href)}>
+        <button type="button" class="action" onClick={goToSignIn}>
           Sign in again
         </button>
       </div>

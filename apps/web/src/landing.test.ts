@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { lastOpenedLabel, remoteAfter } from "./landing";
 
 describe("lastOpenedLabel", () => {
@@ -14,14 +14,7 @@ describe("lastOpenedLabel", () => {
 });
 
 describe("remoteAfter", () => {
-  it("redirects to the login when Access redirects to its login page", () => {
-    const redirect = { expired: vi.fn(() => true), signedIn: vi.fn() };
-    expect(remoteAfter("AuthRedirect", "the sign-in expired", redirect).state).toBe("SigningIn");
-    expect(redirect.expired).toHaveBeenCalledOnce();
-  });
-
-  it("shows the signed-out state when the redirect already ran", () => {
-    const redirect = { expired: () => false, signedIn: vi.fn() };
-    expect(remoteAfter("Http401", "the sign-in expired", redirect).state).toBe("SignedOut");
+  it("shows the signed-out state when Access redirects to its login page", () => {
+    expect(remoteAfter("AuthRedirect", "the sign-in expired").state).toBe("SignedOut");
   });
 });

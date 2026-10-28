@@ -13,7 +13,7 @@ import { errorMessage, reportLink } from "./report";
 import type { ShapeChange } from "./shape";
 import { ShapeToolbar } from "./shape-toolbar";
 import { boardLink, SharePanel } from "./share";
-import { signIn } from "./sign-in";
+import { pageSignIn } from "./sign-in";
 import {
   type ContextTarget,
   createSurface,
@@ -133,15 +133,19 @@ export function Board({ boardId }: { boardId: string }) {
   const closeShare = useCallback(() => setShareOpen(false), []);
   const checkAuthExpired = useCallback(async () => {
     const result = await myBoardsForPage()?.list();
-    return (
+    const expired =
       result !== undefined &&
       !result.ok &&
       (result.reason === "AuthRedirect" ||
         result.reason === "Http401" ||
-        result.reason === "Http403")
-    );
+        result.reason === "Http403");
+    return expired && !pageSignIn().redirectOnce();
   }, []);
-  const notice = useConnectionNotice(connection, checkAuthExpired, signIn);
+  const notice = useConnectionNotice(connection, checkAuthExpired);
+
+  useEffect(() => {
+    if (connection === "Connected") pageSignIn().signedIn();
+  }, [connection]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
